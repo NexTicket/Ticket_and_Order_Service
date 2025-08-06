@@ -5,7 +5,7 @@ from Order.routers import order, cart, user, transaction, analytics
 
 app = FastAPI(
     title="Nexticket API", 
-    description="Commercial Ticket Service API with Venue, Event, and Order Management", 
+    description="Commercial Ticket Service API with Tickets and Order Management", 
     version="2.0.0"
 )
 

@@ -24,7 +24,6 @@ def get_ticket_details(ticket_id: int, session: Session = Depends(get_session)):
 @router.get("/user-ticket/{ticket_id}/qr-data")
 def get_ticket_qr_data(ticket_id: int, session: Session = Depends(get_session)):
     """Get QR code data for a specific ticket"""
-    from models import UserTicket
     ticket = session.get(UserTicket, ticket_id)
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
