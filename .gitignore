@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 .env
 nexticket.db
+STRIPE_FRONTEND_GUIDE.md
