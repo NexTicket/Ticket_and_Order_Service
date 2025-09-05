@@ -1,8 +1,9 @@
 from fastapi import HTTPException
 from sqlmodel import Session, select
 from typing import List, Optional
+from datetime import datetime, timezone
 from models import (
-    CartItem, CartItemCreate, CartItemRead,
+    CartItem, CartItemCreate, CartItemRead, CartItemUpdate,
     User, BulkTicket, CartSummary
 )
 import json
@@ -48,6 +49,7 @@ class CartService:
             # Update existing item
             existing_cart_item.quantity = cart_data.quantity
             existing_cart_item.preferred_seat_ids = cart_data.preferred_seat_ids
+            existing_cart_item.updated_at = datetime.now(timezone.utc)
             session.add(existing_cart_item)
             session.commit()
             session.refresh(existing_cart_item)
@@ -89,30 +91,37 @@ class CartService:
         )
     
     @staticmethod
-    def update_cart_item(session: Session, cart_item_id: int, quantity: int, preferred_seat_ids: str) -> Optional[CartItem]:
+    def update_cart_item(session: Session, cart_item_id: int, update_data: CartItemUpdate) -> Optional[CartItem]:
         """Update cart item quantity and preferred seats"""
         cart_item = session.get(CartItem, cart_item_id)
         if not cart_item:
             return None
         
-        # Validate quantity
-        bulk_ticket = session.get(BulkTicket, cart_item.bulk_ticket_id)
-        if quantity > bulk_ticket.available_seats:
-            raise HTTPException(
-                status_code=400, 
-                detail=f"Only {bulk_ticket.available_seats} seats available"
-            )
+        # Only update fields that are provided
+        if update_data.quantity is not None:
+            # Validate quantity
+            bulk_ticket = session.get(BulkTicket, cart_item.bulk_ticket_id)
+            if update_data.quantity > bulk_ticket.available_seats:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Only {bulk_ticket.available_seats} seats available"
+                )
+            cart_item.quantity = update_data.quantity
         
-        # Validate preferred seat IDs
-        try:
-            preferred_seats = json.loads(preferred_seat_ids)
-            if not isinstance(preferred_seats, list):
-                raise ValueError("Preferred seats must be a list")
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid preferred seat IDs format")
+        if update_data.preferred_seat_ids is not None:
+            # Validate preferred seat IDs
+            try:
+                preferred_seats = json.loads(update_data.preferred_seat_ids)
+                if not isinstance(preferred_seats, list):
+                    raise ValueError("Preferred seats must be a list")
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid preferred seat IDs format")
+            
+            cart_item.preferred_seat_ids = update_data.preferred_seat_ids
         
-        cart_item.quantity = quantity
-        cart_item.preferred_seat_ids = preferred_seat_ids
+        # Update the updated_at timestamp
+        cart_item.updated_at = datetime.now(timezone.utc)
+        
         session.add(cart_item)
         session.commit()
         session.refresh(cart_item)

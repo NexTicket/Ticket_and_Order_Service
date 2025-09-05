@@ -6,3 +6,5 @@ __pycache__/
 .env
 nexticket.db
 STRIPE_FRONTEND_GUIDE.md
+migrate.py
+quick_recreate.py

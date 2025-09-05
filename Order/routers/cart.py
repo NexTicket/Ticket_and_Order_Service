@@ -3,7 +3,7 @@ from sqlmodel import Session
 from typing import List
 from database import get_session
 from models import (
-    CartItem, CartItemCreate, CartItemRead,
+    CartItem, CartItemCreate, CartItemRead, CartItemUpdate,
     CartSummary
 )
 from Order.services.cart_service import CartService
@@ -28,12 +28,11 @@ def get_cart_summary(user_id: int, session: Session = Depends(get_session)):
 @router.put("/{cart_item_id}")
 def update_cart_item(
     cart_item_id: int,
-    quantity: int,
-    preferred_seat_ids: str,
+    update_data: CartItemUpdate,
     session: Session = Depends(get_session)
 ):
     """Update cart item quantity and preferred seats"""
-    updated_item = CartService.update_cart_item(session, cart_item_id, quantity, preferred_seat_ids)
+    updated_item = CartService.update_cart_item(session, cart_item_id, update_data)
     if not updated_item:
         raise HTTPException(status_code=404, detail="Cart item not found")
     return updated_item
