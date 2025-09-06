@@ -22,7 +22,7 @@ class StripeService:
         try:
             intent = stripe.PaymentIntent.create(
                 amount=amount,
-                currency='usd',  # You can change this to 'lkr' for Sri Lankan Rupee
+                currency='lkr',  # You can change this to 'lkr' for Sri Lankan Rupee
                 automatic_payment_methods={
                     'enabled': True,
                 },
