@@ -1,12 +1,28 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 from Ticket.routers import ticket, venue_event
 from Order.routers import order, cart, user, transaction, analytics
+from Payment.routers import payment
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI(
     title="Nexticket API", 
     description="Commercial Ticket Service API with Tickets and Order Management", 
     version="2.0.0"
+)
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[os.getenv("FRONTEND_URL", "http://localhost:3000")],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 # Create database tables on startup
@@ -48,3 +64,4 @@ app.include_router(cart.router, prefix="/api/cart", tags=["Cart"])
 app.include_router(user.router, prefix="/api/users", tags=["Users"])
 app.include_router(transaction.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+app.include_router(payment.router, prefix="/api/orders", tags=["Payment"])

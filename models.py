@@ -181,8 +181,12 @@ class UserOrderBase(SQLModel):
 class UserOrder(UserOrderBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     order_reference: str = Field(default_factory=lambda: f"ORD-{uuid.uuid4().hex[:8].upper()}", unique=True, index=True)
+    payment_intent_id: Optional[str] = Field(default=None, unique=True)
+    stripe_payment_id: Optional[str] = Field(default=None)
+    service_fee: float = Field(default=0.0, ge=0)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
     
     # Relationships
     user: User = Relationship(back_populates="orders")
@@ -195,7 +199,11 @@ class UserOrderCreate(UserOrderBase):
 class UserOrderRead(UserOrderBase):
     id: int
     order_reference: str
+    payment_intent_id: Optional[str] = None
+    stripe_payment_id: Optional[str] = None
+    service_fee: float
     created_at: datetime
+    completed_at: Optional[datetime] = None
 
 class UserOrderUpdate(SQLModel):
     status: Optional[OrderStatus] = None
@@ -273,3 +281,18 @@ class TicketWithDetails(SQLModel):
     seat_type: SeatType
     price_paid: float
     status: TicketStatus
+
+# Stripe Payment Models
+class CreatePaymentIntentRequest(SQLModel):
+    amount: int  # Amount in cents
+    orderId: int
+
+class CreatePaymentIntentResponse(SQLModel):
+    client_secret: str
+    payment_intent_id: str
+
+class CompleteOrderRequest(SQLModel):
+    paymentIntentId: str
+
+class UpdateOrderStatusRequest(SQLModel):
+    status: OrderStatus
