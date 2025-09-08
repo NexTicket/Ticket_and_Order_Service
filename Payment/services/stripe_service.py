@@ -9,16 +9,7 @@ stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 class StripeService:
     @staticmethod
     async def create_payment_intent(amount: int, order_id: int) -> Dict[str, Any]:
-        """
-        Create a Stripe payment intent
-        
-        Args:
-            amount: Amount in cents
-            order_id: Order ID for metadata
-        
-        Returns:
-            Dict containing client_secret and payment_intent_id
-        """
+
         try:
             intent = stripe.PaymentIntent.create(
                 amount=amount,
