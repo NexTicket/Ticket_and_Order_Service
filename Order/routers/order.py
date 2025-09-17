@@ -3,7 +3,9 @@ from sqlmodel import Session
 from typing import List
 from database import get_session
 from models import (
-    UserOrder, UserOrderRead, UserTicketRead
+    UserOrder, UserOrderRead, UserTicketRead,
+    CreatePaymentIntentRequest, CreatePaymentIntentResponse,
+    CompleteOrderRequest
 )
 from Order.services.order_service import OrderService
 
@@ -19,9 +21,19 @@ def create_order_from_cart(
     return OrderService.create_order_from_cart(session, user_id, payment_method)
 
 @router.post("/{order_id}/complete", response_model=UserOrderRead)
-def complete_order(order_id: int, session: Session = Depends(get_session)):
-    """Complete order by creating user tickets and clearing cart"""
-    return OrderService.complete_order(session, order_id)
+async def complete_order(
+    order_id: int,
+    request: CompleteOrderRequest,
+    session: Session = Depends(get_session)
+):
+    """Complete order with payment verification, create user tickets and clear cart"""
+    try:
+        order = await OrderService.complete_order(
+            session, order_id, request.paymentIntentId
+        )
+        return UserOrderRead.model_validate(order)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @router.post("/{order_id}/cancel", response_model=UserOrderRead)
 def cancel_order(order_id: int, session: Session = Depends(get_session)):
@@ -50,3 +62,22 @@ def get_order_tickets(order_id: int, session: Session = Depends(get_session)):
 def get_order_with_details(order_id: int, session: Session = Depends(get_session)):
     """Get order with complete details including tickets"""
     return OrderService.get_order_with_details(session, order_id)
+
+@router.post("/create-payment-intent", response_model=CreatePaymentIntentResponse)
+async def create_payment_intent(
+    request: CreatePaymentIntentRequest,
+    session: Session = Depends(get_session)
+):
+    """Create a Stripe payment intent for an order"""
+    try:
+        payment_data = await OrderService.create_payment_intent(
+            session, request.orderId, request.amount
+        )
+        return CreatePaymentIntentResponse(
+            client_secret=payment_data['client_secret'],
+            payment_intent_id=payment_data['payment_intent_id']
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+

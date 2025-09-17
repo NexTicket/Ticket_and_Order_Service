@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 from Ticket.routers import ticket, venue_event
 from Order.routers import order, cart, user, transaction, analytics
-from Payment.routers import payment
 import os
 from dotenv import load_dotenv
 
@@ -48,7 +47,7 @@ def read_root():
         "endpoints": {
             "venues_events": "/api/venues-events",
             "tickets": "/api/tickets",
-            "orders": "/api/orders", 
+            "orders": "/api/orders (includes payment functionality)", 
             "cart": "/api/cart",
             "users": "/api/users",
             "transactions": "/api/transactions",
@@ -64,4 +63,3 @@ app.include_router(cart.router, prefix="/api/cart", tags=["Cart"])
 app.include_router(user.router, prefix="/api/users", tags=["Users"])
 app.include_router(transaction.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
-app.include_router(payment.router, prefix="/api/orders", tags=["Payment"])

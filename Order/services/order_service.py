@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlmodel import Session, select
 from typing import List, Optional
+from datetime import datetime, timezone
 from models import (
     UserOrder, UserOrderCreate, UserOrderRead, UserOrderUpdate,
     CartItem, UserTicket, Transaction, TransactionCreate,
@@ -8,6 +9,7 @@ from models import (
 )
 from Ticket.services.ticket_service import TicketService
 from Order.services.cart_service import CartService
+from Payment.services.stripe_service import StripeService
 
 class OrderService:
     @staticmethod
@@ -60,14 +62,23 @@ class OrderService:
         return db_order
     
     @staticmethod
-    def complete_order(session: Session, order_id: int) -> UserOrder:
-        """Complete order by creating user tickets and clearing cart"""
+    async def complete_order(session: Session, order_id: int, payment_intent_id: str) -> UserOrder:
+
         order = session.get(UserOrder, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         
         if order.status != OrderStatus.PENDING:
             raise HTTPException(status_code=400, detail="Order is not in pending status")
+        
+        # Verify payment intent ID matches
+        if order.payment_intent_id != payment_intent_id:
+            raise HTTPException(status_code=400, detail="Payment intent ID mismatch")
+        
+        # Verify payment with Stripe
+        is_payment_successful = await StripeService.verify_payment_success(payment_intent_id)
+        if not is_payment_successful:
+            raise HTTPException(status_code=400, detail="Payment not successful")
         
         # Get user's cart items
         cart_items = CartService.get_user_cart(session, order.user_id)
@@ -77,8 +88,11 @@ class OrderService:
         # Create user tickets from cart
         user_tickets = TicketService.create_user_tickets_from_order(session, order, cart_items)
         
-        # Update order status
+        # Update order with completion details
         order.status = OrderStatus.COMPLETED
+        order.stripe_payment_id = payment_intent_id
+        order.completed_at = datetime.now(timezone.utc)
+        order.updated_at = datetime.now(timezone.utc)
         session.add(order)
         
         # Update transaction status
@@ -158,3 +172,28 @@ class OrderService:
             "tickets": tickets,
             "transactions": transactions
         }
+    
+
+    
+    @staticmethod
+    async def create_payment_intent(session: Session, order_id: int, amount: int):
+        """Create payment intent and update order"""
+        order = OrderService.get_order(session, order_id)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        if order.status != OrderStatus.PENDING:
+            raise HTTPException(status_code=400, detail="Order is not in pending status")
+        
+        # Create Stripe payment intent
+        payment_data = await StripeService.create_payment_intent(amount, order_id)
+        
+        # Update order with payment intent ID
+        order.payment_intent_id = payment_data['payment_intent_id']
+        order.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(order)
+        
+        return payment_data
+    
+
