@@ -81,13 +81,13 @@ cp .env.example .env
 uvicorn main:app --reload
 ```
 
-The API will be available at `http://localhost:8000`
+The API will be available at `http://localhost:5000`
 
 ## API Documentation
 
 Once the application is running, you can access:
-- **Interactive API docs**: `http://localhost:8000/docs`
-- **Alternative docs**: `http://localhost:8000/redoc`
+- **Interactive API docs**: `http://localhost:5000/docs`
+- **Alternative docs**: `http://localhost:5000/redoc`
 
 ## API Endpoints
 
@@ -150,7 +150,7 @@ Once the application is running, you can access:
 
 ### Create a User
 ```bash
-curl -X POST "http://localhost:8000/api/users/" \
+curl -X POST "http://localhost:5000/api/users/" \
   -H "Content-Type: application/json" \
   -d '{
     "username": "john_doe",
@@ -162,7 +162,7 @@ curl -X POST "http://localhost:8000/api/users/" \
 
 ### Create a Ticket
 ```bash
-curl -X POST "http://localhost:8000/api/tickets/" \
+curl -X POST "http://localhost:5000/api/tickets/" \
   -H "Content-Type: application/json" \
   -d '{
     "event_name": "Concert 2024",
@@ -178,7 +178,7 @@ curl -X POST "http://localhost:8000/api/tickets/" \
 
 ### Add to Cart
 ```bash
-curl -X POST "http://localhost:8000/api/cart/" \
+curl -X POST "http://localhost:5000/api/cart/" \
   -H "Content-Type: application/json" \
   -d '{
     "user_id": 1,
@@ -189,7 +189,7 @@ curl -X POST "http://localhost:8000/api/cart/" \
 
 ### Create Order from Cart
 ```bash
-curl -X POST "http://localhost:8000/api/orders/from-cart/1"
+curl -X POST "http://localhost:5000/api/orders/from-cart/1"
 ```
 
 ## Database Models

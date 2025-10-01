@@ -4,12 +4,14 @@ from sqlmodel import SQLModel, create_engine, Session
 
 load_dotenv()
 
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ticket_service.db")
+# Use PostgreSQL database (shared with Event_and_Venue_Service)
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Use connect_args only if SQLite is used
-connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL environment variable is required")
 
-engine = create_engine(DATABASE_URL, connect_args=connect_args, echo=True)
+# PostgreSQL doesn't need connect_args like SQLite
+engine = create_engine(DATABASE_URL, echo=True)
 
 def create_db_and_tables():
     SQLModel.metadata.create_all(engine)

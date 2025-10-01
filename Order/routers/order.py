@@ -11,13 +11,27 @@ from Order.services.order_service import OrderService
 
 router = APIRouter()
 
+@router.post("/", response_model=UserOrderRead, status_code=status.HTTP_201_CREATED)
+async def create_order_from_cart_firebase(
+    request_data: dict,
+    session: Session = Depends(get_session)
+):
+    """Create order from user's cart items using Firebase UID"""
+    firebase_uid = request_data.get("firebaseUid")
+    payment_method = request_data.get("paymentMethod", "stripe")
+    
+    if not firebase_uid:
+        raise HTTPException(status_code=400, detail="firebaseUid is required")
+    
+    return await OrderService.create_order_from_cart_by_firebase_uid(session, firebase_uid, payment_method)
+
 @router.post("/create-from-cart/{user_id}", response_model=UserOrderRead, status_code=status.HTTP_201_CREATED)
 def create_order_from_cart(
     user_id: int,
     payment_method: str,
     session: Session = Depends(get_session)
 ):
-    """Create order from user's cart items"""
+    """Create order from user's cart items (deprecated - use Firebase UID version)"""
     return OrderService.create_order_from_cart(session, user_id, payment_method)
 
 @router.post("/{order_id}/complete", response_model=UserOrderRead)
@@ -53,10 +67,20 @@ def get_user_orders(user_id: int, session: Session = Depends(get_session)):
     """Get all orders for a user"""
     return OrderService.get_user_orders(session, user_id)
 
+@router.get("/firebase/{firebase_uid}", response_model=List[UserOrderRead])
+def get_user_orders_by_firebase_uid(firebase_uid: str, session: Session = Depends(get_session)):
+    """Get all orders for a user by Firebase UID"""
+    return OrderService.get_user_orders_by_firebase_uid(session, firebase_uid)
+
 @router.get("/{order_id}/tickets", response_model=List[UserTicketRead])
 def get_order_tickets(order_id: int, session: Session = Depends(get_session)):
     """Get all tickets for an order"""
     return OrderService.get_order_tickets(session, order_id)
+
+@router.get("/firebase/{firebase_uid}/tickets", response_model=List[UserTicketRead])
+def get_user_tickets_by_firebase_uid(firebase_uid: str, session: Session = Depends(get_session)):
+    """Get all tickets for a user by Firebase UID"""
+    return OrderService.get_user_tickets_by_firebase_uid(session, firebase_uid)
 
 @router.get("/{order_id}/details")
 def get_order_with_details(order_id: int, session: Session = Depends(get_session)):

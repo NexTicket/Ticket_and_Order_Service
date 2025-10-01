@@ -5,7 +5,7 @@ from models import (
     BulkTicket, BulkTicketCreate, BulkTicketRead, 
     UserTicket, UserTicketCreate, 
     CartItem, CartItemCreate,
-    UserOrder, User, Event, Venue,
+    UserOrder,
     SeatType, TicketStatus
 )
 import json
@@ -13,21 +13,33 @@ import hashlib
 
 class TicketService:
     @staticmethod
-    def create_bulk_tickets(session: Session, bulk_ticket_data: BulkTicketCreate) -> BulkTicket:
-        """Create bulk tickets for an event (organizer function)"""
-        # Verify event and venue exist
-        from Ticket.services.event_service import EventService
-        event = EventService.get_event(session, bulk_ticket_data.event_id)
-        if not event:
-            raise HTTPException(status_code=404, detail="Event not found")
+    def create_bulk_ticket(session: Session, bulk_ticket_data: BulkTicketCreate) -> BulkTicket:
+        """Create bulk tickets for an external event (references Event/Venue Service)"""
+        # Note: We don't verify external event/venue existence here
+        # That validation should be done by the calling service
         
-        from Ticket.services.venue_service import VenueService
-        venue = VenueService.get_venue(session, bulk_ticket_data.venue_id)
-        if not venue:
-            raise HTTPException(status_code=404, detail="Venue not found")
-        
-        if event.venue_id != bulk_ticket_data.venue_id:
-            raise HTTPException(status_code=400, detail="Event venue mismatch")
+        db_bulk_ticket = BulkTicket.model_validate(bulk_ticket_data.model_dump())
+        session.add(db_bulk_ticket)
+        session.commit()
+        session.refresh(db_bulk_ticket)
+        return db_bulk_ticket
+
+    @staticmethod
+    def get_bulk_tickets(session: Session, skip: int = 0, limit: int = 100) -> List[BulkTicket]:
+        """Get all bulk tickets"""
+        statement = select(BulkTicket).offset(skip).limit(limit)
+        return session.exec(statement).all()
+
+    @staticmethod
+    def get_bulk_ticket(session: Session, bulk_ticket_id: int) -> Optional[BulkTicket]:
+        """Get a specific bulk ticket"""
+        return session.get(BulkTicket, bulk_ticket_id)
+
+    @staticmethod
+    def get_bulk_tickets_by_external_event(session: Session, external_event_id: int) -> List[BulkTicket]:
+        """Get all bulk tickets for an external event"""
+        statement = select(BulkTicket).where(BulkTicket.external_event_id == external_event_id)
+        return session.exec(statement).all()
         
         # Check if bulk ticket already exists
         existing = session.exec(
@@ -79,20 +91,21 @@ class TicketService:
         return available_seats
     
     @staticmethod
-    def generate_qr_code_data(user: User, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat_id: str) -> str:
+    def generate_qr_code_data(firebase_uid: str, bulk_ticket: BulkTicket, seat_id: str, external_event_info: dict = None) -> str:
         """Generate QR code data with comprehensive ticket information"""
         qr_data = {
             "ticket_id": f"{seat_id}-{bulk_ticket.id}",
             "seat_id": seat_id,
-            "user_name": user.full_name,
-            "user_email": user.email,
-            "event_name": event.name,
-            "event_date": event.event_date.isoformat(),
-            "venue_name": venue.name,
-            "venue_address": venue.address,
+            "firebase_uid": firebase_uid,
+            "external_event_id": bulk_ticket.external_event_id,
+            "external_venue_id": bulk_ticket.external_venue_id,
             "seat_type": bulk_ticket.seat_type,
             "price": bulk_ticket.price
         }
+        
+        # Add external event info if provided (from Event/Venue Service)
+        if external_event_info:
+            qr_data.update(external_event_info)
         
         # Create a hash for verification
         qr_string = json.dumps(qr_data, sort_keys=True)
@@ -110,17 +123,12 @@ class TicketService:
         """Create individual user tickets from cart items after order completion"""
         user_tickets = []
         
-        user = session.get(User, order.user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
+        # Note: Firebase UID validation is handled by the calling service layer
         
         for cart_item in cart_items:
             bulk_ticket = session.get(BulkTicket, cart_item.bulk_ticket_id)
             if not bulk_ticket:
                 raise HTTPException(status_code=404, detail=f"Bulk ticket {cart_item.bulk_ticket_id} not found")
-            
-            event = session.get(Event, bulk_ticket.event_id)
-            venue = session.get(Venue, bulk_ticket.venue_id)
             
             # Parse preferred seat IDs
             try:
@@ -150,12 +158,12 @@ class TicketService:
             
             # Create user tickets
             for seat_id in assigned_seats:
-                qr_code_data = TicketService.generate_qr_code_data(user, bulk_ticket, event, venue, seat_id)
+                qr_code_data = TicketService.generate_qr_code_data(order.firebase_uid, bulk_ticket, seat_id)
                 
                 user_ticket_data = UserTicketCreate(
                     order_id=order.id,
                     bulk_ticket_id=cart_item.bulk_ticket_id,
-                    user_id=order.user_id,
+                    firebase_uid=order.firebase_uid,
                     seat_id=seat_id,
                     price_paid=bulk_ticket.price,
                     status=TicketStatus.SOLD
@@ -186,18 +194,16 @@ class TicketService:
     
     @staticmethod
     def get_ticket_with_details(session: Session, ticket_id: int) -> dict:
-        """Get ticket with full event and venue details"""
+        """Get ticket with bulk ticket details (external event/venue info would come from Event/Venue Service)"""
         ticket = session.get(UserTicket, ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
         
         bulk_ticket = session.get(BulkTicket, ticket.bulk_ticket_id)
-        event = session.get(Event, bulk_ticket.event_id)
-        venue = session.get(Venue, bulk_ticket.venue_id)
         
         return {
             "ticket": ticket,
-            "event": event,
-            "venue": venue,
-            "bulk_ticket": bulk_ticket
+            "bulk_ticket": bulk_ticket,
+            "external_event_id": bulk_ticket.external_event_id,
+            "external_venue_id": bulk_ticket.external_venue_id
         }

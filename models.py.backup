@@ -27,19 +27,86 @@ class TransactionStatus(str, Enum):
     FAILED = "failed"
     REFUNDED = "refunded"
 
-class ReservationStatus(str, Enum):
-    RESERVED = "RESERVED"
-    CONFIRMED = "CONFIRMED"
-    CANCELLED = "CANCELLED"
-    EXPIRED = "EXPIRED"
+# User Model
+class UserBase(SQLModel):
+    username: str = Field(unique=True, index=True)
+    email: str = Field(unique=True, index=True)
+    full_name: str
+    phone_number: Optional[str] = None
+    is_active: bool = True
 
-# User authentication is handled by Firebase
-# Ticket service only stores Firebase UIDs as foreign keys
+class User(UserBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: Optional[datetime] = None
+    
+    # Relationships
+    orders: List["UserOrder"] = Relationship(back_populates="user")
+    cart_items: List["CartItem"] = Relationship(back_populates="user")
 
-# BulkTicket Model - References external Event/Venue Service
+class UserCreate(UserBase):
+    pass
+
+class UserRead(UserBase):
+    id: int
+    created_at: datetime
+
+class UserUpdate(SQLModel):
+    username: Optional[str] = None
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    is_active: Optional[bool] = None
+
+# Venue Model
+class VenueBase(SQLModel):
+    name: str = Field(index=True)
+    address: str
+    city: str
+    capacity: int = Field(ge=1)
+    description: Optional[str] = None
+
+class Venue(VenueBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    events: List["Event"] = Relationship(back_populates="venue")
+    bulk_tickets: List["BulkTicket"] = Relationship(back_populates="venue")
+
+class VenueCreate(VenueBase):
+    pass
+
+class VenueRead(VenueBase):
+    id: int
+    created_at: datetime
+
+# Event Model
+class EventBase(SQLModel):
+    name: str = Field(index=True)
+    description: Optional[str] = None
+    event_date: datetime
+    venue_id: int = Field(foreign_key="venue.id")
+
+class Event(EventBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    # Relationships
+    venue: Venue = Relationship(back_populates="events")
+    bulk_tickets: List["BulkTicket"] = Relationship(back_populates="event")
+
+class EventCreate(EventBase):
+    pass
+
+class EventRead(EventBase):
+    id: int
+    created_at: datetime
+
+# BulkTicket Model - Created by organizers
 class BulkTicketBase(SQLModel):
-    external_event_id: int  # References Event/Venue Service
-    external_venue_id: int  # References Event/Venue Service
+    event_id: int = Field(foreign_key="event.id")
+    venue_id: int = Field(foreign_key="venue.id")
     seat_type: SeatType
     price: float = Field(ge=0)
     total_seats: int = Field(ge=1)
@@ -51,7 +118,9 @@ class BulkTicket(BulkTicketBase, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
     
-    # Relationships (only to ticket service entities)
+    # Relationships
+    event: Event = Relationship(back_populates="bulk_tickets")
+    venue: Venue = Relationship(back_populates="bulk_tickets")
     cart_items: List["CartItem"] = Relationship(back_populates="bulk_ticket")
     user_tickets: List["UserTicket"] = Relationship(back_populates="bulk_ticket")
 
@@ -66,34 +135,9 @@ class BulkTicketUpdate(SQLModel):
     price: Optional[float] = None
     available_seats: Optional[int] = None
 
-# SeatReservation Model - Temporary seat reservations before purchase
-class SeatReservationBase(SQLModel):
-    external_event_id: int  # References Event/Venue Service
-    seat_id: str = Field(index=True)  # Unique seat identifier like "A1", "B25", "VIP001"
-    firebase_uid: str  # Direct reference to Firebase user UID
-    status: ReservationStatus = ReservationStatus.RESERVED
-    expires_at: datetime
-    order_id: Optional[int] = Field(default=None, foreign_key="userorder.id")
-
-class SeatReservation(SeatReservationBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: Optional[datetime] = None
-
-    # Relationships
-    order: Optional["UserOrder"] = Relationship(back_populates="reservations")
-
-class SeatReservationCreate(SeatReservationBase):
-    pass
-
-class SeatReservationRead(SeatReservationBase):
-    id: int
-    created_at: datetime
-    updated_at: Optional[datetime] = None
-
 # Cart Model - Items user wants to buy
 class CartItemBase(SQLModel):
-    firebase_uid: str  # Direct reference to Firebase user UID
+    user_id: int = Field(foreign_key="user.id")
     bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
     preferred_seat_ids: str  # JSON string of preferred seat IDs
     quantity: int = Field(ge=1)
@@ -103,7 +147,8 @@ class CartItem(CartItemBase, table=True):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: Optional[datetime] = None
 
-    # Relationships (only to ticket service entities)
+    # Relationships
+    user: User = Relationship(back_populates="cart_items")
     bulk_ticket: BulkTicket = Relationship(back_populates="cart_items")
     
 #     {
@@ -121,7 +166,6 @@ class CartItemCreate(CartItemBase):
 class CartItemRead(CartItemBase):
     id: int
     created_at: datetime
-    bulk_ticket: Optional["BulkTicketRead"] = None
 
 class CartItemUpdate(SQLModel):
     quantity: Optional[int] = Field(None, ge=1)
@@ -129,7 +173,7 @@ class CartItemUpdate(SQLModel):
     
 # UserOrder Model - After purchase
 class UserOrderBase(SQLModel):
-    firebase_uid: str  # Direct reference to Firebase user UID
+    user_id: int = Field(foreign_key="user.id")
     total_amount: float = Field(ge=0)
     status: OrderStatus = OrderStatus.PENDING
     notes: Optional[str] = None
@@ -144,30 +188,22 @@ class UserOrder(UserOrderBase, table=True):
     updated_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     
-    # Relationships (only to ticket service entities)
+    # Relationships
+    user: User = Relationship(back_populates="orders")
     user_tickets: List["UserTicket"] = Relationship(back_populates="order")
     transactions: List["Transaction"] = Relationship(back_populates="order")
-    reservations: List["SeatReservation"] = Relationship(back_populates="order")
 
 class UserOrderCreate(UserOrderBase):
     pass
 
 class UserOrderRead(UserOrderBase):
     id: int
-    order_reference: str = Field(alias="orderReference")
-    payment_intent_id: Optional[str] = Field(default=None, alias="paymentIntentId")
-    stripe_payment_id: Optional[str] = Field(default=None, alias="stripePaymentId")
-    service_fee: float = Field(alias="serviceFee")
-    created_at: datetime = Field(alias="createdAt")
-    updated_at: Optional[datetime] = Field(default=None, alias="updatedAt")
-    completed_at: Optional[datetime] = Field(default=None, alias="completedAt")
-    
-    # Override base fields with aliases
-    firebase_uid: str = Field(alias="firebaseUid")
-    total_amount: float = Field(ge=0, alias="totalAmount")
-    
-    class Config:
-        populate_by_name = True
+    order_reference: str
+    payment_intent_id: Optional[str] = None
+    stripe_payment_id: Optional[str] = None
+    service_fee: float
+    created_at: datetime
+    completed_at: Optional[datetime] = None
 
 class UserOrderUpdate(SQLModel):
     status: Optional[OrderStatus] = None
@@ -177,8 +213,7 @@ class UserOrderUpdate(SQLModel):
 class UserTicketBase(SQLModel):
     order_id: int = Field(foreign_key="userorder.id")
     bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
-    firebase_uid: str  # Direct reference to Firebase user UID
-    external_event_id: int  # References Event/Venue Service
+    user_id: int = Field(foreign_key="user.id")
     seat_id: str = Field(index=True)  # Unique seat identifier like "A1", "B25", "VIP001"
     price_paid: float = Field(ge=0)
     status: TicketStatus = TicketStatus.SOLD
@@ -188,9 +223,10 @@ class UserTicket(UserTicketBase, table=True):
     qr_code_data: str = Field(default="", index=True)  # Will be generated with full details
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
-    # Relationships (only to ticket service entities)
+    # Relationships
     order: UserOrder = Relationship(back_populates="user_tickets")
     bulk_ticket: BulkTicket = Relationship(back_populates="user_tickets")
+    user: User = Relationship()
 
 class UserTicketCreate(UserTicketBase):
     pass

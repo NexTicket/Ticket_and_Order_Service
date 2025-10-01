@@ -12,18 +12,18 @@ router = APIRouter()
 
 @router.post("/", response_model=CartItemRead, status_code=status.HTTP_201_CREATED)
 def add_to_cart(cart_item: CartItemCreate, session: Session = Depends(get_session)):
-    """Add item to cart with preferred seat selection"""
+    """Add item to cart with preferred seat selection using Firebase UID"""
     return CartService.add_to_cart(session, cart_item)
 
-@router.get("/user/{user_id}", response_model=List[CartItemRead])
-def get_user_cart(user_id: int, session: Session = Depends(get_session)):
-    """Get all cart items for a user"""
-    return CartService.get_user_cart(session, user_id)
+@router.get("/user/{firebase_uid}", response_model=List[CartItemRead])
+def get_user_cart(firebase_uid: str, session: Session = Depends(get_session)):
+    """Get all cart items for a Firebase user"""
+    return CartService.get_user_cart_by_firebase_uid(session, firebase_uid)
 
-@router.get("/user/{user_id}/summary", response_model=CartSummary)
-def get_cart_summary(user_id: int, session: Session = Depends(get_session)):
-    """Get cart summary with total items and amount"""
-    return CartService.get_cart_summary(session, user_id)
+@router.get("/user/{firebase_uid}/summary", response_model=CartSummary)
+async def get_cart_summary(firebase_uid: str, session: Session = Depends(get_session)):
+    """Get cart summary with total items and amount for Firebase user"""
+    return await CartService.get_cart_summary_by_firebase_uid(session, firebase_uid)
 
 @router.put("/{cart_item_id}")
 def update_cart_item(
@@ -44,7 +44,7 @@ def remove_from_cart(cart_item_id: int, session: Session = Depends(get_session))
     if not success:
         raise HTTPException(status_code=404, detail="Cart item not found")
 
-@router.delete("/user/{user_id}/clear", status_code=status.HTTP_204_NO_CONTENT)
-def clear_user_cart(user_id: int, session: Session = Depends(get_session)):
-    """Clear all items from user's cart"""
-    CartService.clear_user_cart(session, user_id)
+@router.delete("/user/{firebase_uid}/clear", status_code=status.HTTP_204_NO_CONTENT)
+def clear_user_cart(firebase_uid: str, session: Session = Depends(get_session)):
+    """Clear all items from Firebase user's cart"""
+    CartService.clear_user_cart_by_firebase_uid(session, firebase_uid)
