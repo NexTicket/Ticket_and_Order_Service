@@ -56,6 +56,11 @@ def read_root():
         }
     }
 
+@app.get("/health")
+def health_check():
+    """Health check endpoint for Docker and load balancers"""
+    return {"status": "healthy", "service": "nexticket-api"}
+
 # Include routers
 app.include_router(venue_event.router, prefix="/api/venues-events", tags=["Venues & Events"])
 app.include_router(ticket.router, prefix="/api/tickets", tags=["Tickets"])
