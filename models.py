@@ -27,36 +27,6 @@ class TransactionStatus(str, Enum):
     FAILED = "failed"
     REFUNDED = "refunded"
 
-# User Model
-class UserBase(SQLModel):
-    username: str = Field(unique=True, index=True)
-    email: str = Field(unique=True, index=True)
-    full_name: str
-    phone_number: Optional[str] = None
-    is_active: bool = True
-
-class User(UserBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: Optional[datetime] = None
-    
-    # Relationships
-    orders: List["UserOrder"] = Relationship(back_populates="user")
-    cart_items: List["CartItem"] = Relationship(back_populates="user")
-
-class UserCreate(UserBase):
-    pass
-
-class UserRead(UserBase):
-    id: int
-    created_at: datetime
-
-class UserUpdate(SQLModel):
-    username: Optional[str] = None
-    email: Optional[str] = None
-    full_name: Optional[str] = None
-    phone_number: Optional[str] = None
-    is_active: Optional[bool] = None
 
 # Venue Model
 class VenueBase(SQLModel):
@@ -121,7 +91,6 @@ class BulkTicket(BulkTicketBase, table=True):
     # Relationships
     event: Event = Relationship(back_populates="bulk_tickets")
     venue: Venue = Relationship(back_populates="bulk_tickets")
-    cart_items: List["CartItem"] = Relationship(back_populates="bulk_ticket")
     user_tickets: List["UserTicket"] = Relationship(back_populates="bulk_ticket")
 
 class BulkTicketCreate(BulkTicketBase):
@@ -135,45 +104,28 @@ class BulkTicketUpdate(SQLModel):
     price: Optional[float] = None
     available_seats: Optional[int] = None
 
-# Cart Model - Items user wants to buy
-class CartItemBase(SQLModel):
-    user_id: int = Field(foreign_key="user.id")
-    bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
-    preferred_seat_ids: str  # JSON string of preferred seat IDs
-    quantity: int = Field(ge=1)
+# Redis Cart Models (for temporary cart data structure)
+class RedisCartItem(SQLModel):
+    bulk_ticket_id: int
+    seat_ids: List[str]  # Specific seat IDs locked for this item
+    quantity: int
+    price_per_seat: float
 
-class CartItem(CartItemBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    updated_at: Optional[datetime] = None
-
-    # Relationships
-    user: User = Relationship(back_populates="cart_items")
-    bulk_ticket: BulkTicket = Relationship(back_populates="cart_items")
+class CreateOrderFromRedisRequest(SQLModel):
+    payment_method: str = "stripe"
     
-#     {
-#   "user_id": 1,
-#   "bulk_ticket_id": 1,
-#   "preferred_seat_ids": "[\"SM1\", \"SM2\", \"SM3\"]",
-#   "quantity": 3,
-#   "id": 1,
-#   "created_at": "2025-09-05T14:07:14.913187"
-# }
-
-class CartItemCreate(CartItemBase):
-    pass
-
-class CartItemRead(CartItemBase):
-    id: int
-    created_at: datetime
-
-class CartItemUpdate(SQLModel):
-    quantity: Optional[int] = Field(None, ge=1)
-    preferred_seat_ids: Optional[str] = None
+class OrderSummaryResponse(SQLModel):
+    cart_id: str
+    user_id: str 
+    total_seats: int
+    total_amount: float
+    items: List[RedisCartItem]
+    expires_at: datetime
+    remaining_seconds: int
     
 # UserOrder Model - After purchase
 class UserOrderBase(SQLModel):
-    user_id: int = Field(foreign_key="user.id")
+    firebase_uid: str = Field(index=True)  # Firebase UID instead of user_id
     total_amount: float = Field(ge=0)
     status: OrderStatus = OrderStatus.PENDING
     notes: Optional[str] = None
@@ -189,7 +141,6 @@ class UserOrder(UserOrderBase, table=True):
     completed_at: Optional[datetime] = None
     
     # Relationships
-    user: User = Relationship(back_populates="orders")
     user_tickets: List["UserTicket"] = Relationship(back_populates="order")
     transactions: List["Transaction"] = Relationship(back_populates="order")
 
@@ -213,7 +164,7 @@ class UserOrderUpdate(SQLModel):
 class UserTicketBase(SQLModel):
     order_id: int = Field(foreign_key="userorder.id")
     bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
-    user_id: int = Field(foreign_key="user.id")
+    firebase_uid: str = Field(index=True)  # Firebase UID instead of user_id
     seat_id: str = Field(index=True)  # Unique seat identifier like "A1", "B25", "VIP001"
     price_paid: float = Field(ge=0)
     status: TicketStatus = TicketStatus.SOLD
@@ -226,7 +177,6 @@ class UserTicket(UserTicketBase, table=True):
     # Relationships
     order: UserOrder = Relationship(back_populates="user_tickets")
     bulk_ticket: BulkTicket = Relationship(back_populates="user_tickets")
-    user: User = Relationship()
 
 class UserTicketCreate(UserTicketBase):
     pass
@@ -265,11 +215,60 @@ class TransactionUpdate(SQLModel):
     status: Optional[TransactionStatus] = None
     transaction_reference: Optional[str] = None
 
+# Ticket Locking Models (Redis-based temporary cart)
+
+class LockSeatsRequest(SQLModel):
+    seat_ids: List[str]
+    event_id: int
+    bulk_ticket_id: Optional[int] = None  # Optional for additional validation
+
+class LockSeatsResponse(SQLModel):
+    message: str
+    cart_id: str
+    user_id: str
+    seat_ids: List[str]
+    event_id: int
+    expires_in_seconds: int
+    expires_at: datetime
+
+class UnlockSeatsRequest(SQLModel):
+    cart_id: Optional[str] = None  # If not provided, unlock all user's locked seats
+    seat_ids: Optional[List[str]] = None  # If provided, unlock only these seats
+
+class UnlockSeatsResponse(SQLModel):
+    message: str
+    unlocked_seat_ids: List[str]
+
+class GetLockedSeatsResponse(SQLModel):
+    cart_id: str
+    user_id: str
+    seat_ids: List[str]
+    event_id: int
+    status: str
+    expires_at: datetime
+    remaining_seconds: int
+
+class SeatAvailabilityRequest(SQLModel):
+    event_id: int
+    seat_ids: List[str]
+
+class SeatAvailabilityResponse(SQLModel):
+    event_id: int
+    available_seats: List[str]
+    locked_seats: List[dict]  # List of {seat_id, locked_by_user_id, expires_at}
+    unavailable_seats: List[str]  # Already sold/reserved in main DB
+
+class ExtendLockRequest(SQLModel):
+    cart_id: str
+    additional_seconds: Optional[int] = 300  # Default 5 minutes extension
+
+class ExtendLockResponse(SQLModel):
+    message: str
+    cart_id: str
+    new_expires_at: datetime
+    total_remaining_seconds: int
+
 # Helper Models for API responses
-class CartSummary(SQLModel):
-    total_items: int
-    total_amount: float
-    items: List[CartItemRead]
 
 class TicketWithDetails(SQLModel):
     id: int

@@ -8,3 +8,4 @@ STRIPE_FRONTEND_GUIDE.md
 migrate.py
 quick_recreate.py
 *.db
+firebase-service-account.json

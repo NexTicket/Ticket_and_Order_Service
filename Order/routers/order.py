@@ -1,35 +1,49 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
-from typing import List
+from typing import List, Optional
 from database import get_session
+from firebase_auth import get_current_user_from_token
 from models import (
     UserOrder, UserOrderRead, UserTicketRead,
     CreatePaymentIntentRequest, CreatePaymentIntentResponse,
-    CompleteOrderRequest
+    CompleteOrderRequest, CreateOrderFromRedisRequest, OrderSummaryResponse
 )
 from Order.services.order_service import OrderService
 
 router = APIRouter()
 
-@router.post("/create-from-cart/{user_id}", response_model=UserOrderRead, status_code=status.HTTP_201_CREATED)
-def create_order_from_cart(
-    user_id: int,
-    payment_method: str,
+@router.get("/cart-summary", response_model=Optional[OrderSummaryResponse])
+def get_cart_summary(
+    current_user: dict = Depends(get_current_user_from_token)
+):
+    """Get summary of current Redis cart"""
+    firebase_uid = current_user['uid']
+    return OrderService.get_redis_cart_summary(firebase_uid)
+
+@router.post("/create-from-redis-cart", response_model=UserOrderRead, status_code=status.HTTP_201_CREATED)
+def create_order_from_redis_cart(
+    request: CreateOrderFromRedisRequest,
+    current_user: dict = Depends(get_current_user_from_token),
     session: Session = Depends(get_session)
 ):
-    """Create order from user's cart items"""
-    return OrderService.create_order_from_cart(session, user_id, payment_method)
+    """Create order from Redis temporary cart"""
+    firebase_uid = current_user['uid']
+    return OrderService.create_order_from_redis_cart(
+        session, firebase_uid, request.payment_method
+    )
 
 @router.post("/{order_id}/complete", response_model=UserOrderRead)
 async def complete_order(
     order_id: int,
     request: CompleteOrderRequest,
+    current_user: dict = Depends(get_current_user_from_token),
     session: Session = Depends(get_session)
 ):
-    """Complete order with payment verification, create user tickets and clear cart"""
+    """Complete order with payment verification, create user tickets and clear Redis cart"""
     try:
+        firebase_uid = current_user['uid']
         order = await OrderService.complete_order(
-            session, order_id, request.paymentIntentId
+            session, order_id, request.paymentIntentId, firebase_uid
         )
         return UserOrderRead.model_validate(order)
     except Exception as e:
@@ -48,10 +62,19 @@ def get_order(order_id: int, session: Session = Depends(get_session)):
         raise HTTPException(status_code=404, detail="Order not found")
     return order
 
-@router.get("/user/{user_id}", response_model=List[UserOrderRead])
-def get_user_orders(user_id: int, session: Session = Depends(get_session)):
-    """Get all orders for a user"""
-    return OrderService.get_user_orders(session, user_id)
+@router.get("/my-orders", response_model=List[UserOrderRead])
+def get_my_orders(
+    current_user: dict = Depends(get_current_user_from_token),
+    session: Session = Depends(get_session)
+):
+    """Get all orders for the authenticated user"""
+    firebase_uid = current_user['uid']
+    return OrderService.get_user_orders(session, firebase_uid)
+
+@router.get("/user/{firebase_uid}", response_model=List[UserOrderRead])
+def get_user_orders_by_uid(firebase_uid: str, session: Session = Depends(get_session)):
+    """Get all orders for a user by Firebase UID (admin function)"""
+    return OrderService.get_user_orders(session, firebase_uid)
 
 @router.get("/{order_id}/tickets", response_model=List[UserTicketRead])
 def get_order_tickets(order_id: int, session: Session = Depends(get_session)):
