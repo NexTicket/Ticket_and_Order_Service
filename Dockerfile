@@ -1,5 +1,5 @@
 # Use Python 3.12 slim image for smaller size and better security
-FROM python:3.12-slim as builder
+FROM python:3.12-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -12,7 +12,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
+    libpq5 \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
 
 # Create and use a non-root user
 RUN groupadd -r appuser && useradd -r -g appuser appuser
@@ -25,31 +28,6 @@ COPY requirements.txt .
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Production stage
-FROM python:3.12-slim as production
-
-# Set environment variables
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PYTHONHASHSEED=random \
-    PATH="/home/appuser/.local/bin:$PATH"
-
-# Install only runtime dependencies
-RUN apt-get update && apt-get install -y \
-    libpq5 \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean
-
-# Create and use a non-root user
-RUN groupadd -r appuser && useradd -r -g appuser appuser
-
-# Set work directory
-WORKDIR /app
-
-# Copy Python packages from builder stage
-COPY --from=builder /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
-COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY --chown=appuser:appuser . .
