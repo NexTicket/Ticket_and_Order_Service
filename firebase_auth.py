@@ -7,7 +7,7 @@ from fastapi.security import OAuth2PasswordBearer
 # --- Firebase Admin SDK Initialization ---
 # Load the path to your service account key from an environment variable
 # Example: export FIREBASE_CREDENTIALS_PATH="/path/to/your/serviceAccountKey.json"
-cred_path = os.getenv("FIREBASE_CREDENTIALS_PATH")
+cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH")
 if not cred_path:
     raise ValueError("The FIREBASE_CREDENTIALS_PATH environment variable is not set.")
 

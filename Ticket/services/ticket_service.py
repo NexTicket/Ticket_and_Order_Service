@@ -4,8 +4,8 @@ from typing import List, Optional
 from models import (
     BulkTicket, BulkTicketCreate, BulkTicketRead, 
     UserTicket, UserTicketCreate, 
-    CartItem, CartItemCreate,
-    UserOrder, User, Event, Venue,
+    RedisCartItem,
+    UserOrder, Event, Venue,
     SeatType, TicketStatus
 )
 import json
@@ -79,13 +79,12 @@ class TicketService:
         return available_seats
     
     @staticmethod
-    def generate_qr_code_data(user: User, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat_id: str) -> str:
+    def generate_qr_code_data(firebase_uid: str, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat_id: str) -> str:
         """Generate QR code data with comprehensive ticket information"""
         qr_data = {
             "ticket_id": f"{seat_id}-{bulk_ticket.id}",
             "seat_id": seat_id,
-            "user_name": user.full_name,
-            "user_email": user.email,
+            "firebase_uid": firebase_uid,
             "event_name": event.name,
             "event_date": event.event_date.isoformat(),
             "venue_name": venue.name,
@@ -105,14 +104,10 @@ class TicketService:
     def create_user_tickets_from_order(
         session: Session, 
         order: UserOrder, 
-        cart_items: List[CartItem]
+        cart_items: List[RedisCartItem]
     ) -> List[UserTicket]:
-        """Create individual user tickets from cart items after order completion"""
+        """Create individual user tickets from Redis cart items after order completion"""
         user_tickets = []
-        
-        user = session.get(User, order.user_id)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found")
         
         for cart_item in cart_items:
             bulk_ticket = session.get(BulkTicket, cart_item.bulk_ticket_id)
@@ -122,42 +117,27 @@ class TicketService:
             event = session.get(Event, bulk_ticket.event_id)
             venue = session.get(Venue, bulk_ticket.venue_id)
             
-            # Parse preferred seat IDs
-            try:
-                preferred_seats = json.loads(cart_item.preferred_seat_ids)
-            except json.JSONDecodeError:
-                preferred_seats = []
+            # Use the specific seat IDs from Redis cart (they were already locked)
+            assigned_seats = cart_item.seat_ids
             
-            # Get available seats
-            available_seats = TicketService.get_available_seats(session, cart_item.bulk_ticket_id)
-            
-            # Assign seats (prefer user's choice, fallback to available)
-            assigned_seats = []
-            for preferred_seat in preferred_seats[:cart_item.quantity]:
-                if preferred_seat in available_seats:
-                    assigned_seats.append(preferred_seat)
-                    available_seats.remove(preferred_seat)
-            
-            # Fill remaining with any available seats
-            while len(assigned_seats) < cart_item.quantity and available_seats:
-                assigned_seats.append(available_seats.pop(0))
-            
-            if len(assigned_seats) < cart_item.quantity:
+            if len(assigned_seats) != cart_item.quantity:
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"Not enough available seats for bulk ticket {cart_item.bulk_ticket_id}"
+                    detail=f"Seat count mismatch for bulk ticket {cart_item.bulk_ticket_id}"
                 )
             
             # Create user tickets
             for seat_id in assigned_seats:
-                qr_code_data = TicketService.generate_qr_code_data(user, bulk_ticket, event, venue, seat_id)
+                qr_code_data = TicketService.generate_qr_code_data(
+                    order.firebase_uid, bulk_ticket, event, venue, seat_id
+                )
                 
                 user_ticket_data = UserTicketCreate(
                     order_id=order.id,
                     bulk_ticket_id=cart_item.bulk_ticket_id,
-                    user_id=order.user_id,
+                    firebase_uid=order.firebase_uid,
                     seat_id=seat_id,
-                    price_paid=bulk_ticket.price,
+                    price_paid=cart_item.price_per_seat,
                     status=TicketStatus.SOLD
                 )
                 
@@ -179,9 +159,9 @@ class TicketService:
         return user_tickets
     
     @staticmethod
-    def get_user_tickets(session: Session, user_id: int) -> List[UserTicket]:
+    def get_user_tickets(session: Session, firebase_uid: str) -> List[UserTicket]:
         """Get all tickets owned by a user"""
-        statement = select(UserTicket).where(UserTicket.user_id == user_id)
+        statement = select(UserTicket).where(UserTicket.firebase_uid == firebase_uid)
         return session.exec(statement).all()
     
     @staticmethod

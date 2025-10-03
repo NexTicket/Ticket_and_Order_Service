@@ -3,7 +3,7 @@ from sqlmodel import Session, select, func
 from typing import Dict, Any, List
 from database import get_session
 from models import (
-    UserOrder, UserTicket, User, Transaction, BulkTicket, Event, Venue,
+    UserOrder, UserTicket, Transaction, BulkTicket, Event, Venue,
     OrderStatus, TransactionStatus, TicketStatus
 )
 from datetime import datetime, timedelta
@@ -15,7 +15,10 @@ def get_dashboard_analytics(session: Session = Depends(get_session)) -> Dict[str
     """Get comprehensive dashboard analytics"""
     
     # Basic counts
-    total_users = len(session.exec(select(User)).all())
+    # Count unique Firebase UIDs from orders (represents unique users)
+    unique_firebase_uids = len(set(
+        order.firebase_uid for order in session.exec(select(UserOrder)).all()
+    ))
     total_venues = len(session.exec(select(Venue)).all())
     total_events = len(session.exec(select(Event)).all())
     total_bulk_tickets = len(session.exec(select(BulkTicket)).all())
@@ -47,7 +50,7 @@ def get_dashboard_analytics(session: Session = Depends(get_session)) -> Dict[str
     
     return {
         "totals": {
-            "users": total_users,
+            "unique_users": unique_firebase_uids,
             "venues": total_venues,
             "events": total_events,
             "bulk_tickets": total_bulk_tickets,
@@ -73,10 +76,14 @@ def get_total_revenue(session: Session = Depends(get_session)) -> Dict[str, floa
 
 @router.get("/users/active")
 def get_active_users(session: Session = Depends(get_session)) -> Dict[str, int]:
-    """Get count of active users"""
-    active_users = len(session.exec(
-        select(User).where(User.is_active == True)
-    ).all())
+    """Get count of users with recent activity (last 30 days)"""
+    # Since there's no User model, count unique Firebase UIDs with recent orders
+    thirty_days_ago = datetime.utcnow() - timedelta(days=30)
+    recent_orders = session.exec(
+        select(UserOrder).where(UserOrder.created_at >= thirty_days_ago)
+    ).all()
+    
+    active_users = len(set(order.firebase_uid for order in recent_orders))
     
     return {"active_users": active_users}
 
