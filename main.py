@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 from Ticket.routers import ticket, venue_event
-from Order.routers import order, cart, user, transaction, analytics
+from Order.routers import order, transaction, analytics, ticket_locking
 import os
 from dotenv import load_dotenv
 
@@ -39,17 +39,18 @@ def read_root():
             "venues": "Venue management",
             "events": "Event management with date/time",
             "bulk_tickets": "Bulk ticket creation by organizers",
-            "seat_selection": "User preferred seat selection",
-            "cart": "Shopping cart with seat preferences",
-            "orders": "Order management with QR codes",
-            "qr_codes": "Auto-generated QR codes with full details"
+            "redis_cart": "Temporary Redis-based seat locking (5-min expiry)",
+            "firebase_auth": "Firebase JWT authentication (user management in separate microservice)",
+            "seat_locking": "Real-time seat locking to prevent conflicts",
+            "orders": "Order management with QR codes from Redis cart",
+            "qr_codes": "Auto-generated QR codes with full details",
+            "stripe_payment": "Stripe payment processing"
         },
         "endpoints": {
             "venues_events": "/api/venues-events",
             "tickets": "/api/tickets",
-            "orders": "/api/orders (includes payment functionality)", 
-            "cart": "/api/cart",
-            "users": "/api/users",
+            "orders": "/api/orders (Firebase auth + Redis cart integration)", 
+            "ticket_locking": "/api/ticket-locking (Redis-based seat management)",
             "transactions": "/api/transactions",
             "analytics": "/api/analytics"
         }
@@ -59,7 +60,8 @@ def read_root():
 app.include_router(venue_event.router, prefix="/api/venues-events", tags=["Venues & Events"])
 app.include_router(ticket.router, prefix="/api/tickets", tags=["Tickets"])
 app.include_router(order.router, prefix="/api/orders", tags=["Orders"])
-app.include_router(cart.router, prefix="/api/cart", tags=["Cart"])
-app.include_router(user.router, prefix="/api/users", tags=["Users"])
+# app.include_router(cart.router, prefix="/api/cart", tags=["Cart"])  # Disabled - using Redis cart only
+# app.include_router(user.router, prefix="/api/users", tags=["Users"])  # Disabled - user management in separate microservice
 app.include_router(transaction.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
+app.include_router(ticket_locking.router, prefix="/api/ticket-locking", tags=["Ticket Locking"])

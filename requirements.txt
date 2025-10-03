@@ -6,3 +6,7 @@ pydantic>=2.5.0
 sqlite3
 psycopg2-binary
 stripe>=5.0.0
+fastapi[all]
+redis 
+firebase-admin
+
