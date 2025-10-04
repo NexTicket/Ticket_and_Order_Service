@@ -18,7 +18,7 @@ app = FastAPI(
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("FRONTEND_URL", "http://localhost:3000")],
+    allow_origins=[os.getenv("APIGATEWAY_URL", "http://localhost:5000")],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -49,8 +49,8 @@ def read_root():
         "endpoints": {
             "venues_events": "/api/venues-events",
             "tickets": "/api/tickets",
-            "orders": "/api/orders (Firebase auth + Redis cart integration)", 
-            "ticket_locking": "/api/ticket-locking (Redis-based seat management)",
+            "orders": "/api/orders", 
+            "ticket_locking": "/api/ticket-locking",
             "transactions": "/api/transactions",
             "analytics": "/api/analytics"
         }
