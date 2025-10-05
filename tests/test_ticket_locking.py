@@ -11,8 +11,7 @@ from datetime import datetime
 # Configuration
 BASE_URL = "http://localhost:8000/api/ticket-locking"
 # You'll need to replace this with a valid Firebase token for testing
-TEST_TOKEN = "your_firebase_token_here"
-
+TEST_TOKEN = "eyJhbGciOiJSUzI1NiIsImtpZCI6ImU4MWYwNTJhZWYwNDBhOTdjMzlkMjY1MzgxZGU2Y2I0MzRiYzM1ZjMiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vbmV4dGlja2V0LWMyYzQ3IiwiYXVkIjoibmV4dGlja2V0LWMyYzQ3IiwiYXV0aF90aW1lIjoxNzU5NjY0Njg5LCJ1c2VyX2lkIjoibXpuQVdmRHlXcWM2N3g0T2RjcGNjQ1VQV3ViMiIsInN1YiI6Im16bkFXZkR5V3FjNjd4NE9kY3BjY0NVUFd1YjIiLCJpYXQiOjE3NTk2NjQ2ODksImV4cCI6MTc1OTY2ODI4OSwiZW1haWwiOiJ0ZXN0Y3VzQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjpmYWxzZSwiZmlyZWJhc2UiOnsiaWRlbnRpdGllcyI6eyJlbWFpbCI6WyJ0ZXN0Y3VzQGdtYWlsLmNvbSJdfSwic2lnbl9pbl9wcm92aWRlciI6InBhc3N3b3JkIn19.BfTW1JlJomCSTUMGwr7FNTPixzo3phhmRRxVVALep0Fgsbsfs4V6GMvdNNUODKHCnRYNAwDisBTtecQv-25TO4SHTJNj6vULd1h7WNmackLh1xUVpqeXc8KSIVHId78Uqo6yErUV1ucDDR5Hzb8CZi8BWQZbFlIW-CiEPS2jlCFx1TM4iBFbUUK4NIk3gFUoks_f8miRlIybDV5FYtMvGc4DiDcRX-N5XOxW59-Y_6fiih8kfO16hlXCGpk6fviqqH1NmcGpc3-OokRkTBY8BSfarw3iMgJ1lgURMYCsC7mVWwyUR-hinDj5b4x7bHM8qmPCuRdsx0dH5Qf8Qj7fbQ"
 headers = {
     "Authorization": f"Bearer {TEST_TOKEN}",
     "Content-Type": "application/json"
@@ -127,6 +126,32 @@ def test_unlock_seats(cart_id):
         print(f"   Error: {response.text}")
         return False
 
+def test_final_persistent_lock():
+    """Lock 4 seats and leave them until expiration"""
+    print("\n🔐 Final Test: Locking 4 seats for persistence...")
+    
+    payload = {
+        "seat_ids": ["B1", "B2", "B3", "B4"],
+        "event_id": 1
+    }
+    
+    response = requests.post(f"{BASE_URL}/lock-seats", json=payload, headers=headers)
+    
+    if response.status_code == 201:
+        result = response.json()
+        print(f"✅ Final seats locked successfully!")
+        print(f"   Cart ID: {result['cart_id']}")
+        print(f"   Seats: {payload['seat_ids']}")
+        print(f"   Expires in: {result['expires_in_seconds']} seconds ({result['expires_in_seconds']//60}m {result['expires_in_seconds']%60}s)")
+        print(f"   Expires at: {result['expires_at']}")
+        print(f"🔥 These seats will remain locked until expiration!")
+        print(f"💡 Monitor with Redis keys: cart:{result.get('user_id', 'unknown')} and seat_lock:1:B1-B4")
+        return result['cart_id']
+    else:
+        print(f"❌ Failed to lock final seats: {response.status_code}")
+        print(f"   Error: {response.text}")
+        return None
+
 def main():
     """Run all tests"""
     print("🚀 Starting Ticket Locking Tests...")
@@ -162,8 +187,15 @@ def main():
     time.sleep(1)
     test_get_locked_seats()
     
+    # Final Test: Lock 4 seats and leave them
+    time.sleep(1)
+    final_cart_id = test_final_persistent_lock()
+    
     print("\n" + "=" * 50)
     print("🎉 All tests completed!")
+    if final_cart_id:
+        print(f"🔐 4 seats (B1-B4) remain locked with cart ID: {final_cart_id}")
+        print(f"⏰ They will expire automatically in 5 minutes")
 
 if __name__ == "__main__":
     print("⚠️  Make sure to:")
@@ -173,7 +205,7 @@ if __name__ == "__main__":
     print("4. Ensure you have the required dependencies installed")
     print()
     
-    # Uncomment the line below when you're ready to run tests
-    # main()
+    # Run the tests
+    main()
     
-    print("Update the TEST_TOKEN variable and uncomment main() to run tests.")
+    print("✅ Test execution completed!")

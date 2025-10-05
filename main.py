@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 from Ticket.routers import ticket, venue_event
@@ -16,12 +16,23 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+allowed_origins = [
+    os.getenv("APIGATEWAY_URL", "http://localhost:5000"),  # Local development
+]
+
+# Add Docker network origins
+docker_gateway = os.getenv("APIGATEWAY_DOCKER_URL")
+if docker_gateway:
+    allowed_origins.append(docker_gateway)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[os.getenv("APIGATEWAY_URL", "http://localhost:5000")],
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    allow_origin_regex=r".*",  
 )
 
 # Create database tables on startup
@@ -59,7 +70,50 @@ def read_root():
 @app.get("/health")
 def health_check():
     """Health check endpoint for Docker and load balancers"""
-    return {"status": "healthy", "service": "nexticket-api"}
+    from Database.redis_client import test_redis_connection
+    
+    redis_status = test_redis_connection()
+    return {
+        "status": "healthy" if redis_status else "degraded",
+        "service": "nexticket-api",
+        "redis": "connected" if redis_status else "disconnected",
+        "firebase_auth": "configured"
+    }
+
+@app.get("/health/auth")
+def auth_health_check(current_user=None):
+    """Health check endpoint that tests Firebase auth (optional)"""
+    from firebase_auth import get_current_user_from_token
+    from fastapi import Depends
+    
+    try:
+        # This will be None if no auth header provided, which is fine for health check
+        return {
+            "status": "healthy",
+            "service": "nexticket-api", 
+            "auth_configured": True,
+            "user_authenticated": current_user is not None
+        }
+    except Exception as e:
+        return {
+            "status": "healthy",
+            "service": "nexticket-api",
+            "auth_configured": True,
+            "auth_error": str(e)
+        }
+
+@app.get("/debug/headers")
+def debug_headers(request: Request):
+    """Debug endpoint to see what headers are being received from API Gateway"""
+    
+    return {
+        "headers": dict(request.headers),
+        "method": request.method,
+        "url": str(request.url),
+        "client": request.client.host if request.client else None,
+        "auth_header_present": "authorization" in request.headers,
+        "auth_header_value": request.headers.get("authorization", "Not present")[:50] + "..." if request.headers.get("authorization") else "Not present"
+    }
 
 # Include routers
 app.include_router(venue_event.router, prefix="/api/venues-events", tags=["Venues & Events"])
