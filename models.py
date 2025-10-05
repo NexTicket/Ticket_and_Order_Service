@@ -247,6 +247,7 @@ class GetLockedSeatsResponse(SQLModel):
     status: str
     expires_at: datetime
     remaining_seconds: int
+    bulk_ticket_info: Optional[dict] = None
 
 class SeatAvailabilityRequest(SQLModel):
     event_id: int
