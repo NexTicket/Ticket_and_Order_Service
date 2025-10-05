@@ -172,6 +172,11 @@ class TicketLockingService:
             TicketLockingService._cleanup_user_locks(user_id)
             return None
         
+        # Parse bulk ticket information if available
+        bulk_ticket_info = {}
+        if 'bulk_ticket_info' in cart_data:
+            bulk_ticket_info = json.loads(cart_data['bulk_ticket_info'])
+        
         return GetLockedSeatsResponse(
             cart_id=cart_data['cart_id'],
             user_id=cart_data['user_id'],
@@ -179,7 +184,8 @@ class TicketLockingService:
             event_id=int(cart_data['event_id']),
             status=cart_data['status'],
             expires_at=expires_at,
-            remaining_seconds=remaining_seconds
+            remaining_seconds=remaining_seconds,
+            bulk_ticket_info=bulk_ticket_info
         )
     
     @staticmethod
