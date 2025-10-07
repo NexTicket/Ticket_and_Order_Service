@@ -118,7 +118,7 @@ def test_hash_operations():
     try:
         hash_key = "test:user_cart"
         cart_data = {
-            "cart_id": "test-cart-123",
+            "order_id": "test-cart-123",
             "user_id": "test-user-456",
             "event_id": "1",
             "seat_ids": json.dumps(["A1", "A2", "A3"]),
@@ -178,7 +178,7 @@ def test_seat_locking_simulation():
         expires_at = datetime.now(timezone.utc) + timedelta(seconds=CART_EXPIRATION_SECONDS)
         
         cart_data = {
-            "cart_id": cart_id,
+            "order_id": cart_id,
             "user_id": user_id,
             "event_id": event_id,
             "seat_ids": json.dumps(seat_ids),
@@ -199,7 +199,7 @@ def test_seat_locking_simulation():
             seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
             seat_lock_data = {
                 "user_id": user_id,
-                "cart_id": cart_id,
+                "order_id": cart_id,
                 "locked_at": datetime.now(timezone.utc).isoformat(),
                 "expires_at": expires_at.isoformat()
             }
@@ -212,7 +212,7 @@ def test_seat_locking_simulation():
         
         # Verify data was stored
         stored_cart = redis_conn.hgetall(cart_key)
-        print(f"✅ Cart stored: {stored_cart['cart_id']} for user {stored_cart['user_id']}")
+        print(f"✅ Cart stored: {stored_cart['order_id']} for user {stored_cart['user_id']}")
         
         # Check seat locks
         locked_seats = []

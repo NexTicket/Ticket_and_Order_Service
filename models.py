@@ -104,22 +104,23 @@ class BulkTicketUpdate(SQLModel):
     price: Optional[float] = None
     available_seats: Optional[int] = None
 
-# Redis Cart Models (for temporary cart data structure)
-class RedisCartItem(SQLModel):
+# Redis Order Models (for temporary order data structure)
+class RedisOrderItem(SQLModel):
+    """Individual item in Redis order with bulk ticket info"""
     bulk_ticket_id: int
-    seat_ids: List[str]  # Specific seat IDs locked for this item
+    seat_ids: List[str]
     quantity: int
     price_per_seat: float
 
-class CreateOrderFromRedisRequest(SQLModel):
+class AddPaymentToOrderRequest(SQLModel):
     payment_method: str = "stripe"
     
 class OrderSummaryResponse(SQLModel):
-    cart_id: str
+    order_id: str
     user_id: str 
     total_seats: int
     total_amount: float
-    items: List[RedisCartItem]
+    items: List[RedisOrderItem]
     expires_at: datetime
     remaining_seconds: int
     
@@ -131,7 +132,7 @@ class UserOrderBase(SQLModel):
     notes: Optional[str] = None
 
 class UserOrder(UserOrderBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     order_reference: str = Field(default_factory=lambda: f"ORD-{uuid.uuid4().hex[:8].upper()}", unique=True, index=True)
     payment_intent_id: Optional[str] = Field(default=None, unique=True)
     stripe_payment_id: Optional[str] = Field(default=None)
@@ -148,7 +149,7 @@ class UserOrderCreate(UserOrderBase):
     pass
 
 class UserOrderRead(UserOrderBase):
-    id: int
+    id: str
     order_reference: str
     payment_intent_id: Optional[str] = None
     stripe_payment_id: Optional[str] = None
@@ -162,7 +163,7 @@ class UserOrderUpdate(SQLModel):
 
 # UserTicket Model - Individual tickets owned by users
 class UserTicketBase(SQLModel):
-    order_id: int = Field(foreign_key="userorder.id")
+    order_id: str = Field(foreign_key="userorder.id")
     bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
     firebase_uid: str = Field(index=True)  # Firebase UID instead of user_id
     seat_id: str = Field(index=True)  # Unique seat identifier like "A1", "B25", "VIP001"
@@ -188,7 +189,7 @@ class UserTicketRead(UserTicketBase):
 
 # Transaction Model
 class TransactionBase(SQLModel):
-    order_id: int = Field(foreign_key="userorder.id")
+    order_id: str = Field(foreign_key="userorder.id")
     amount: float = Field(ge=0)
     payment_method: str
     transaction_reference: Optional[str] = None
@@ -215,7 +216,7 @@ class TransactionUpdate(SQLModel):
     status: Optional[TransactionStatus] = None
     transaction_reference: Optional[str] = None
 
-# Ticket Locking Models (Redis-based temporary cart)
+# Ticket Locking Models (Redis-based temporary order)
 
 class LockSeatsRequest(SQLModel):
     seat_ids: List[str]
@@ -224,7 +225,7 @@ class LockSeatsRequest(SQLModel):
 
 class LockSeatsResponse(SQLModel):
     message: str
-    cart_id: str
+    order_id: str
     user_id: str
     seat_ids: List[str]
     event_id: int
@@ -232,7 +233,7 @@ class LockSeatsResponse(SQLModel):
     expires_at: datetime
 
 class UnlockSeatsRequest(SQLModel):
-    cart_id: Optional[str] = None  # If not provided, unlock all user's locked seats
+    order_id: Optional[str] = None  # If not provided, unlock all user's locked seats
     seat_ids: Optional[List[str]] = None  # If provided, unlock only these seats
 
 class UnlockSeatsResponse(SQLModel):
@@ -240,7 +241,7 @@ class UnlockSeatsResponse(SQLModel):
     unlocked_seat_ids: List[str]
 
 class GetLockedSeatsResponse(SQLModel):
-    cart_id: str
+    order_id: str
     user_id: str
     seat_ids: List[str]
     event_id: int
@@ -260,12 +261,12 @@ class SeatAvailabilityResponse(SQLModel):
     unavailable_seats: List[str]  # Already sold/reserved in main DB
 
 class ExtendLockRequest(SQLModel):
-    cart_id: str
+    order_id: str
     additional_seconds: Optional[int] = 300  # Default 5 minutes extension
 
 class ExtendLockResponse(SQLModel):
     message: str
-    cart_id: str
+    order_id: str
     new_expires_at: datetime
     total_remaining_seconds: int
 
@@ -285,7 +286,7 @@ class TicketWithDetails(SQLModel):
 # Stripe Payment Models
 class CreatePaymentIntentRequest(SQLModel):
     amount: int  # Amount in cents
-    orderId: int
+    orderId: str
 
 class CreatePaymentIntentResponse(SQLModel):
     client_secret: str

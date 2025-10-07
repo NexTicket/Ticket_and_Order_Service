@@ -4,7 +4,7 @@ from typing import List, Optional
 from models import (
     BulkTicket, BulkTicketCreate, BulkTicketRead, 
     UserTicket, UserTicketCreate, 
-    RedisCartItem,
+    RedisOrderItem,
     UserOrder, Event, Venue,
     SeatType, TicketStatus
 )
@@ -104,7 +104,7 @@ class TicketService:
     def create_user_tickets_from_order(
         session: Session, 
         order: UserOrder, 
-        cart_items: List[RedisCartItem]
+        cart_items: List[RedisOrderItem]
     ) -> List[UserTicket]:
         """Create individual user tickets from Redis cart items after order completion"""
         user_tickets = []
