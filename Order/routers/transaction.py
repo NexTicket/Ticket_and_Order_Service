@@ -17,7 +17,7 @@ def create_transaction(transaction: TransactionCreate, session: Session = Depend
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    if order.status not in [OrderStatus.PENDING, OrderStatus.CONFIRMED]:
+    if order.status not in [OrderStatus.PENDING]:
         raise HTTPException(
             status_code=400,
             detail=f"Cannot create transaction for order with status: {order.status}"

@@ -9,7 +9,8 @@ from Database.redis_client import redis_conn, CART_EXPIRATION_SECONDS as ORDER_E
 from models import (
     BulkTicket, UserTicket, UserOrder, UserOrderCreate,
     LockSeatsRequest, LockSeatsResponse, UnlockSeatsRequest, UnlockSeatsResponse,
-    GetLockedSeatsResponse, SeatAvailabilityResponse, ExtendLockResponse, OrderStatus
+    GetLockedSeatsResponse, SeatAvailabilityResponse, ExtendLockResponse, OrderStatus,
+    SeatOrder, SeatOrderCreate
 )
 
 class TicketLockingService:
@@ -138,7 +139,31 @@ class TicketLockingService:
                 "order_id": order_id
             })
             session.add(db_order)
+            # Commit the order first to ensure it exists for foreign key references
             session.commit()
+            session.refresh(db_order)
+            
+            # Create OrderSeatAssignment records for each bulk ticket
+            try:
+                for bulk_ticket_id, seats in seat_assignments.items():
+                    bulk_ticket = session.get(BulkTicket, int(bulk_ticket_id))
+                    if bulk_ticket:
+                        seat_assignment = SeatOrder(
+                        order_id=order_id,
+                        event_id=request_data.event_id,
+                        venue_id=bulk_ticket.venue_id,
+                        bulk_ticket_id=bulk_ticket.id,
+                        seat_ids=json.dumps(seats)
+                    )
+                        session.add(seat_assignment)
+                
+                # Commit the seat assignments
+                session.commit()
+            except Exception as e:
+                # If seat assignments fail, the order is still created, which is acceptable
+                # We can log the error but don't need to fail the entire transaction
+                print(f"Warning: Failed to create seat assignments: {e}")
+                # Continue with the process as the order was successfully created
         except Exception as e:
             # If database update fails, clean up Redis locks
             try:
@@ -202,16 +227,20 @@ class TicketLockingService:
                     # Remove entire order if all seats unlocked
                     redis_conn.delete(f"order:{user_id}")
                     
-                    # Cancel order in database (if it exists)
-                    order = session.get(UserOrder, order_id)
-                    if order and order.status == OrderStatus.PENDING:
-                        order.status = OrderStatus.CANCELLED
-                        order.notes = json.dumps({
-                            "cancellation_reason": "User unlocked seats",
-                            "cancelled_at": datetime.now(timezone.utc).isoformat()
-                        })
-                        session.add(order)
-                        session.commit()
+                # Cancel order in database (if it exists)
+                order = session.get(UserOrder, order_id)
+                if order and order.status == OrderStatus.PENDING:
+                    order.status = OrderStatus.CANCELLED
+                    order.notes = json.dumps({
+                        "cancellation_reason": "User unlocked seats",
+                        "cancelled_at": datetime.now(timezone.utc).isoformat()
+                    })
+                    session.add(order)
+                    
+                    # We don't need to delete seat assignments when cancelling
+                    # They're useful to keep for reference even for cancelled orders
+                    
+                    session.commit()
                 
                 return UnlockSeatsResponse(
                     message=f"Successfully unlocked {len(seats_to_unlock)} seats",
@@ -458,6 +487,10 @@ class TicketLockingService:
                         "cancelled_at": datetime.now(timezone.utc).isoformat()
                     })
                     session.add(order)
+                    
+                    # We don't need to delete seat assignments when cancelling
+                    # They're useful to keep for reference even for cancelled orders
+                    
                     session.commit()
         
         return unlocked_seats

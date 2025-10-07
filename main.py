@@ -4,7 +4,14 @@ from database import create_db_and_tables
 from Ticket.routers import ticket, venue_event
 from Order.routers import order, transaction, analytics, ticket_locking
 import os
+import logging
 from dotenv import load_dotenv
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 
 # Load environment variables
 load_dotenv()
@@ -35,10 +42,19 @@ app.add_middleware(
     allow_origin_regex=r".*",  
 )
 
-# Create database tables on startup
+# Create database tables and initialize scheduled tasks on startup
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
+    # Initialize scheduled tasks
+    from Order.services.scheduler import init_scheduled_tasks
+    init_scheduled_tasks()
+
+@app.on_event("shutdown")
+def on_shutdown():
+    # Shutdown scheduler gracefully
+    from Order.services.scheduler import shutdown_scheduler
+    shutdown_scheduler()
 
 @app.get("/")
 def read_root():

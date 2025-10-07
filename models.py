@@ -17,9 +17,9 @@ class TicketStatus(str, Enum):
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
-    CONFIRMED = "confirmed"
     CANCELLED = "cancelled"
     COMPLETED = "completed"
+    EXPIRED = "expired"
 
 class TransactionStatus(str, Enum):
     PENDING = "pending"
@@ -215,6 +215,25 @@ class TransactionRead(TransactionBase):
 class TransactionUpdate(SQLModel):
     status: Optional[TransactionStatus] = None
     transaction_reference: Optional[str] = None
+
+# SeatOrder Model - Links orders with specific seats
+class SeatOrderBase(SQLModel):
+    order_id: str = Field(foreign_key="userorder.id", index=True)
+    event_id: int = Field(foreign_key="event.id")
+    venue_id: int = Field(foreign_key="venue.id")
+    bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
+    seat_ids: str  # JSON string containing list of seat IDs
+
+class SeatOrder(SeatOrderBase, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class SeatOrderCreate(SeatOrderBase):
+    pass
+
+class SeatOrderRead(SeatOrderBase):
+    id: int
+    created_at: datetime
 
 # Ticket Locking Models (Redis-based temporary order)
 

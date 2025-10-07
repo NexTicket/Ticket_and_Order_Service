@@ -14,6 +14,7 @@ from datetime import datetime
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
 
 from sqlmodel import SQLModel, create_engine
+from sqlalchemy import text
 from models import *
 from database import DATABASE_URL
 
@@ -51,9 +52,14 @@ def reset_database():
         # Create engine
         engine = create_engine(DATABASE_URL)
         
-        # Drop all tables
+        # Drop all tables with CASCADE using direct SQL for PostgreSQL
         print("🗑️  Dropping all tables...")
-        SQLModel.metadata.drop_all(engine)
+        with engine.connect() as conn:
+            conn.execute(text("DROP SCHEMA public CASCADE;"))
+            conn.execute(text("CREATE SCHEMA public;"))
+            conn.execute(text("GRANT ALL ON SCHEMA public TO postgres;"))
+            conn.execute(text("GRANT ALL ON SCHEMA public TO public;"))
+            conn.commit()
         
         # Create all tables
         print("🏗️  Creating all tables...")

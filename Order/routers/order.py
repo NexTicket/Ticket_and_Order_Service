@@ -6,7 +6,8 @@ from firebase_auth import get_current_user_from_token
 from models import (
     UserOrder, UserOrderRead, UserTicketRead,
     CreatePaymentIntentRequest, CreatePaymentIntentResponse,
-    CompleteOrderRequest, AddPaymentToOrderRequest, OrderSummaryResponse
+    CompleteOrderRequest, AddPaymentToOrderRequest, OrderSummaryResponse,
+    SeatOrder
 )
 from Order.services.order_service import OrderService
 
@@ -85,6 +86,11 @@ def get_order_tickets(order_id: int, session: Session = Depends(get_session)):
 def get_order_with_details(order_id: int, session: Session = Depends(get_session)):
     """Get order with complete details including tickets"""
     return OrderService.get_order_with_details(session, order_id)
+
+@router.get("/{order_id}/seat-assignments")
+def get_order_seat_assignments(order_id: int, session: Session = Depends(get_session)):
+    """Get seat assignments for an order"""
+    return OrderService.get_order_seat_assignments(session, order_id)
 
 @router.post("/create-payment-intent", response_model=CreatePaymentIntentResponse)
 async def create_payment_intent(
