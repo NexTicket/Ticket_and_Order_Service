@@ -1,34 +1,36 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
 from typing import List, Optional
+from datetime import datetime, timezone
 from database import get_session
 from firebase_auth import get_current_user_from_token
 from models import (
     UserOrder, UserOrderRead, UserTicketRead,
     CreatePaymentIntentRequest, CreatePaymentIntentResponse,
-    CompleteOrderRequest, CreateOrderFromRedisRequest, OrderSummaryResponse
+    CompleteOrderRequest, AddPaymentToOrderRequest, OrderSummaryResponse,
+    SeatOrder
 )
 from Order.services.order_service import OrderService
 
 router = APIRouter()
 
-@router.get("/cart-summary", response_model=Optional[OrderSummaryResponse])
-def get_cart_summary(
+@router.get("/order-summary", response_model=Optional[OrderSummaryResponse])
+def get_order_summary(
     current_user: dict = Depends(get_current_user_from_token)
 ):
-    """Get summary of current Redis cart"""
+    """Get summary of current Redis order"""
     firebase_uid = current_user['uid']
-    return OrderService.get_redis_cart_summary(firebase_uid)
+    return OrderService.get_redis_order_summary(firebase_uid)
 
-@router.post("/create-from-redis-cart", response_model=UserOrderRead, status_code=status.HTTP_201_CREATED)
-def create_order_from_redis_cart(
-    request: CreateOrderFromRedisRequest,
+@router.post("/add-payment", response_model=UserOrderRead, status_code=status.HTTP_201_CREATED)
+def add_payment_to_order(
+    request: AddPaymentToOrderRequest,
     current_user: dict = Depends(get_current_user_from_token),
     session: Session = Depends(get_session)
 ):
-    """Create order from Redis temporary cart"""
+    """Add payment to existing order"""
     firebase_uid = current_user['uid']
-    return OrderService.create_order_from_redis_cart(
+    return OrderService.add_payment_to_order(
         session, firebase_uid, request.payment_method
     )
 
@@ -39,7 +41,7 @@ async def complete_order(
     current_user: dict = Depends(get_current_user_from_token),
     session: Session = Depends(get_session)
 ):
-    """Complete order with payment verification, create user tickets and clear Redis cart"""
+    """Complete order with payment verification, create user tickets and clean up Redis data"""
     try:
         firebase_uid = current_user['uid']
         order = await OrderService.complete_order(
@@ -86,6 +88,11 @@ def get_order_with_details(order_id: int, session: Session = Depends(get_session
     """Get order with complete details including tickets"""
     return OrderService.get_order_with_details(session, order_id)
 
+@router.get("/{order_id}/seat-assignments")
+def get_order_seat_assignments(order_id: int, session: Session = Depends(get_session)):
+    """Get seat assignments for an order"""
+    return OrderService.get_order_seat_assignments(session, order_id)
+
 @router.post("/create-payment-intent", response_model=CreatePaymentIntentResponse)
 async def create_payment_intent(
     request: CreatePaymentIntentRequest,
@@ -93,14 +100,34 @@ async def create_payment_intent(
 ):
     """Create a Stripe payment intent for an order"""
     try:
-        payment_data = await OrderService.create_payment_intent(
-            session, request.orderId, request.amount
+        # Direct integration with StripeService to avoid circular imports
+        from Payment.services.stripe_service import StripeService
+        
+        # Get order to verify it exists and is pending
+        order = session.get(UserOrder, request.orderId)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+            
+        if order.status != "PENDING":
+            raise HTTPException(status_code=400, detail="Order is not in pending status")
+            
+        # Create payment intent - convert amount to cents for Stripe
+        # Stripe requires minimum amount (usually 50 cents equivalent)
+        stripe_amount = int(request.amount * 100)  # Convert to cents
+        
+        payment_data = await StripeService.create_payment_intent(
+            amount=stripe_amount, 
+            order_id=request.orderId
         )
+        
+        # Update order with payment intent ID
+        order.payment_intent_id = payment_data['payment_intent_id']
+        order.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        
         return CreatePaymentIntentResponse(
             client_secret=payment_data['client_secret'],
             payment_intent_id=payment_data['payment_intent_id']
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-

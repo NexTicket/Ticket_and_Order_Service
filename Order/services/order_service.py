@@ -7,7 +7,8 @@ from models import (
     UserOrder, UserOrderCreate, UserOrderRead, UserOrderUpdate,
     UserTicket, Transaction, TransactionCreate,
     BulkTicket, OrderStatus, TransactionStatus,
-    RedisCartItem, OrderSummaryResponse
+    RedisOrderItem, OrderSummaryResponse,
+    SeatOrder, SeatOrderCreate
 )
 from Ticket.services.ticket_service import TicketService
 from Order.services.ticket_locking_service import TicketLockingService
@@ -17,17 +18,17 @@ from Database.redis_client import redis_conn
 class OrderService:
     
     @staticmethod
-    def get_redis_cart_summary(firebase_uid: str) -> Optional[OrderSummaryResponse]:
-        """Get cart summary from Redis"""
-        cart_data = TicketLockingService._get_user_cart_data(firebase_uid)
+    def get_redis_order_summary(firebase_uid: str) -> Optional[OrderSummaryResponse]:
+        """Get order summary from Redis"""
+        order_data = TicketLockingService._get_user_order_data(firebase_uid)
         
-        if not cart_data:
+        if not order_data:
             return None
         
-        # Parse cart data
-        seat_ids = json.loads(cart_data.get('seat_ids', '[]'))
-        event_id = int(cart_data.get('event_id'))
-        expires_at = datetime.fromisoformat(cart_data['expires_at'])
+        # Parse order data
+        seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+        event_id = int(order_data.get('event_id'))
+        expires_at = datetime.fromisoformat(order_data['expires_at'])
         remaining_seconds = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
         
         if remaining_seconds <= 0:
@@ -35,9 +36,9 @@ class OrderService:
         
         # Get bulk ticket info if available
         bulk_ticket_info = {}
-        if cart_data.get('bulk_ticket_info'):
+        if order_data.get('bulk_ticket_info'):
             try:
-                bulk_ticket_info = json.loads(cart_data['bulk_ticket_info'])
+                bulk_ticket_info = json.loads(order_data['bulk_ticket_info'])
             except json.JSONDecodeError:
                 bulk_ticket_info = {}
         
@@ -45,7 +46,7 @@ class OrderService:
         price_per_seat = bulk_ticket_info.get('price_per_seat', 0.0)
         total_amount = price_per_seat * len(seat_ids)
         
-        items = [RedisCartItem(
+        items = [RedisOrderItem(
             bulk_ticket_id=bulk_ticket_info.get('bulk_ticket_id', 0),
             seat_ids=seat_ids,
             quantity=len(seat_ids),
@@ -53,7 +54,7 @@ class OrderService:
         )]
         
         return OrderSummaryResponse(
-            cart_id=cart_data['cart_id'],
+            order_id=order_data['order_id'],
             user_id=firebase_uid,
             total_seats=len(seat_ids),
             total_amount=total_amount,
@@ -63,67 +64,40 @@ class OrderService:
         )
     
     @staticmethod
-    def create_order_from_redis_cart(session: Session, firebase_uid: str, payment_method: str) -> UserOrder:
-        """Create order from Redis temporary cart"""
-        # Get cart data from Redis
-        cart_data = TicketLockingService._get_user_cart_data(firebase_uid)
-        if not cart_data:
-            raise HTTPException(status_code=400, detail="No temporary cart found or cart expired")
+    def add_payment_to_order(session: Session, firebase_uid: str, payment_method: str) -> UserOrder:
+        """Create or update transaction for an existing order from Redis"""
+        # Get order data from Redis
+        order_data = TicketLockingService._get_user_order_data(firebase_uid)
+        if not order_data:
+            raise HTTPException(status_code=400, detail="No temporary order found or order expired")
         
-        # Parse cart data
-        seat_ids = json.loads(cart_data.get('seat_ids', '[]'))
-        event_id = int(cart_data.get('event_id'))
+        # Parse order data
+        seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+        event_id = int(order_data.get('event_id'))
+        order_id = order_data.get('order_id')
         
         if not seat_ids:
-            raise HTTPException(status_code=400, detail="No seats in cart")
+            raise HTTPException(status_code=400, detail="No seats in order")
         
-        # Get bulk ticket information to calculate pricing
-        # For now, we'll need to determine which bulk ticket these seats belong to
-        # This requires matching seat_ids to bulk_ticket based on seat_prefix and event_id
-        bulk_tickets = session.exec(
-            select(BulkTicket).where(BulkTicket.event_id == event_id)
-        ).all()
+        if not order_id:
+            raise HTTPException(status_code=400, detail="Invalid order data: missing order_id")
         
-        if not bulk_tickets:
-            raise HTTPException(status_code=404, detail="No tickets available for this event")
+        # Get existing order from database
+        db_order = session.get(UserOrder, order_id)
+        if not db_order:
+            raise HTTPException(status_code=404, detail="Order not found in database")
         
-        # Match seats to bulk tickets based on seat prefix
-        total_amount = 0
-        seat_assignments = {}  # bulk_ticket_id -> [seat_ids]
+        if db_order.status != OrderStatus.PENDING:
+            raise HTTPException(status_code=400, detail=f"Order is in {db_order.status} status, expected PENDING")
         
-        for seat_id in seat_ids:
-            matched = False
-            for bulk_ticket in bulk_tickets:
-                if seat_id.startswith(bulk_ticket.seat_prefix):
-                    if bulk_ticket.id not in seat_assignments:
-                        seat_assignments[bulk_ticket.id] = []
-                    seat_assignments[bulk_ticket.id].append(seat_id)
-                    total_amount += bulk_ticket.price
-                    matched = True
-                    break
-            
-            if not matched:
-                raise HTTPException(
-                    status_code=400, 
-                    detail=f"Seat {seat_id} does not match any available ticket types"
-                )
+        # Verify user owns this order
+        if db_order.firebase_uid != firebase_uid:
+            raise HTTPException(status_code=403, detail="Order belongs to another user")
         
-        # Create order
-        order_data = UserOrderCreate(
-            firebase_uid=firebase_uid,
-            total_amount=total_amount,
-            status=OrderStatus.PENDING
-        )
-        
-        db_order = UserOrder.model_validate(order_data)
-        session.add(db_order)
-        session.commit()
-        session.refresh(db_order)
-        
-        # Create transaction
+        # Create transaction for the order
         transaction_data = TransactionCreate(
             order_id=db_order.id,
-            amount=total_amount,
+            amount=db_order.total_amount,
             payment_method=payment_method,
             status=TransactionStatus.PENDING
         )
@@ -132,12 +106,8 @@ class OrderService:
         session.add(db_transaction)
         session.commit()
         
-        # Store seat assignments in order for later completion
-        # We'll store this as a note for now, but ideally this should be in a separate table
-        db_order.notes = json.dumps({
-            "seat_assignments": seat_assignments,
-            "cart_id": cart_data['cart_id']
-        })
+        # Update order updated_at timestamp
+        db_order.updated_at = datetime.now(timezone.utc)
         session.add(db_order)
         session.commit()
         session.refresh(db_order)
@@ -145,7 +115,7 @@ class OrderService:
         return db_order
     
     @staticmethod
-    async def complete_order(session: Session, order_id: int, payment_intent_id: str, firebase_uid: str) -> UserOrder:
+    async def complete_order(session: Session, order_id: str, payment_intent_id: str, firebase_uid: str) -> UserOrder:
         """Complete order from Redis cart data"""
         order = session.get(UserOrder, order_id)
         if not order:
@@ -163,47 +133,78 @@ class OrderService:
         if not is_payment_successful:
             raise HTTPException(status_code=400, detail="Payment not successful")
         
-        # Get seat assignments from order notes
-        if not order.notes:
-            raise HTTPException(status_code=400, detail="No seat assignment data found in order")
-        
-        try:
-            order_data = json.loads(order.notes)
-            seat_assignments = order_data.get("seat_assignments", {})
-            cart_id = order_data.get("cart_id")
-        except json.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid order data format")
+        # Get seat assignments from the OrderSeatAssignment table first
+        seat_assignments = OrderService.get_order_seat_assignments(session, order_id)
         
         if not seat_assignments:
-            raise HTTPException(status_code=400, detail="No seat assignments found")
-        
-        # Create user tickets from seat assignments
-        user_tickets = []
-        for bulk_ticket_id, seat_ids in seat_assignments.items():
-            bulk_ticket = session.get(BulkTicket, int(bulk_ticket_id))
-            if not bulk_ticket:
-                raise HTTPException(status_code=404, detail=f"Bulk ticket {bulk_ticket_id} not found")
+            # Fall back to getting seat assignments from order notes if not found in table
+            if not order.notes:
+                raise HTTPException(status_code=400, detail="No seat assignment data found in order")
             
-            for seat_id in seat_ids:
-                # Create individual user ticket
-                user_ticket = UserTicket(
-                    order_id=order.id,
-                    bulk_ticket_id=bulk_ticket.id,
-                    firebase_uid=order.firebase_uid,
-                    seat_id=seat_id,
-                    price_paid=bulk_ticket.price,
-                    status="sold"
-                )
+            try:
+                order_data = json.loads(order.notes)
+                seat_assignments_dict = order_data.get("seat_assignments", {})
+                if not seat_assignments_dict:
+                    raise HTTPException(status_code=400, detail="No seat assignments found in order notes")
                 
-                # Generate QR code data
-                qr_data = {
-                    "ticket_id": f"temp_{order.id}_{seat_id}",
-                    "event_id": bulk_ticket.event_id,
-                    "venue_id": bulk_ticket.venue_id,
-                    "seat_id": seat_id,
-                    "firebase_uid": order.firebase_uid,
-                    "order_ref": order.order_reference
-                }
+                # Process seat assignments from order notes
+                user_tickets = []
+                for bulk_ticket_id, seat_ids in seat_assignments_dict.items():
+                    bulk_ticket = session.get(BulkTicket, int(bulk_ticket_id))
+                    if not bulk_ticket:
+                        raise HTTPException(status_code=404, detail=f"Bulk ticket {bulk_ticket_id} not found")
+                    
+                    for seat_id in seat_ids:
+                        # Create individual user ticket
+                        user_ticket = UserTicket(
+                            order_id=order.id,
+                            bulk_ticket_id=bulk_ticket.id,
+                            firebase_uid=order.firebase_uid,
+                            seat_id=seat_id,
+                            price_paid=bulk_ticket.price,
+                            status="sold"
+                        )
+                        
+                        # Generate QR code data
+                        qr_data = {
+                            "ticket_id": f"temp_{order.id}_{seat_id}",
+                            "event_id": bulk_ticket.event_id,
+                            "venue_id": bulk_ticket.venue_id,
+                            "seat_id": seat_id,
+                            "firebase_uid": order.firebase_uid,
+                            "order_ref": order.order_reference
+                        }
+            except json.JSONDecodeError:
+                raise HTTPException(status_code=400, detail="Invalid order data format")
+        else:
+            # Process seat assignments from OrderSeatAssignment table
+            user_tickets = []
+            for seat_assignment in seat_assignments:
+                bulk_ticket = session.get(BulkTicket, seat_assignment.bulk_ticket_id)
+                if not bulk_ticket:
+                    continue
+                
+                seat_ids = json.loads(seat_assignment.seat_ids)
+                for seat_id in seat_ids:
+                    # Create individual user ticket
+                    user_ticket = UserTicket(
+                        order_id=order.id,
+                        bulk_ticket_id=bulk_ticket.id,
+                        firebase_uid=order.firebase_uid,
+                        seat_id=seat_id,
+                        price_paid=bulk_ticket.price,
+                        status="sold"
+                    )
+                    
+                    # Generate QR code data
+                    qr_data = {
+                        "ticket_id": f"temp_{order.id}_{seat_id}",
+                        "event_id": bulk_ticket.event_id,
+                        "venue_id": bulk_ticket.venue_id,
+                        "seat_id": seat_id,
+                        "firebase_uid": order.firebase_uid,
+                        "order_ref": order.order_reference
+                    }
                 user_ticket.qr_code_data = json.dumps(qr_data)
                 
                 session.add(user_ticket)
@@ -229,7 +230,7 @@ class OrderService:
             transaction.transaction_reference = payment_intent_id
             session.add(transaction)
         
-        # Clear Redis cart
+        # Clear Redis order (no need to cancel order since we're completing it)
         TicketLockingService._cleanup_user_locks(firebase_uid)
         
         session.commit()
@@ -238,16 +239,17 @@ class OrderService:
         return order
     
     @staticmethod
-    def cancel_order(session: Session, order_id: int) -> UserOrder:
+    def cancel_order(session: Session, order_id: str) -> UserOrder:
         """Cancel an order"""
         order = session.get(UserOrder, order_id)
         if not order:
             raise HTTPException(status_code=404, detail="Order not found")
         
-        if order.status not in [OrderStatus.PENDING, OrderStatus.CONFIRMED]:
+        if order.status not in [OrderStatus.PENDING]:
             raise HTTPException(status_code=400, detail="Cannot cancel this order")
         
         order.status = OrderStatus.CANCELLED
+        order.updated_at = datetime.now(timezone.utc)
         session.add(order)
         
         # Update transaction status
@@ -256,7 +258,11 @@ class OrderService:
         ).first()
         if transaction:
             transaction.status = TransactionStatus.FAILED
+            transaction.updated_at = datetime.now(timezone.utc)
             session.add(transaction)
+        
+        # We don't need to modify seat assignments when cancelling the order
+        # They remain as a record of what seats were initially assigned
         
         session.commit()
         session.refresh(order)
@@ -264,7 +270,7 @@ class OrderService:
         return order
     
     @staticmethod
-    def get_order(session: Session, order_id: int) -> Optional[UserOrder]:
+    def get_order(session: Session, order_id: str) -> Optional[UserOrder]:
         """Get order by ID"""
         return session.get(UserOrder, order_id)
     
@@ -275,13 +281,13 @@ class OrderService:
         return session.exec(statement).all()
     
     @staticmethod
-    def get_order_tickets(session: Session, order_id: int) -> List[UserTicket]:
+    def get_order_tickets(session: Session, order_id: str) -> List[UserTicket]:
         """Get all tickets for an order"""
         statement = select(UserTicket).where(UserTicket.order_id == order_id)
         return session.exec(statement).all()
     
     @staticmethod
-    def get_order_with_details(session: Session, order_id: int) -> dict:
+    def get_order_with_details(session: Session, order_id: str) -> dict:
         """Get order with complete details including tickets"""
         order = session.get(UserOrder, order_id)
         if not order:
@@ -293,33 +299,20 @@ class OrderService:
             select(Transaction).where(Transaction.order_id == order_id)
         ).all()
         
+        seat_assignments = session.exec(
+            select(SeatOrder).where(SeatOrder.order_id == order_id)
+        ).all()
+        
         return {
             "order": order,
             "tickets": tickets,
-            "transactions": transactions
+            "transactions": transactions,
+            "seat_assignments": seat_assignments
         }
     
-
-    
     @staticmethod
-    async def create_payment_intent(session: Session, order_id: int, amount: int):
-        """Create payment intent and update order"""
-        order = OrderService.get_order(session, order_id)
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        
-        if order.status != OrderStatus.PENDING:
-            raise HTTPException(status_code=400, detail="Order is not in pending status")
-        
-        # Create Stripe payment intent
-        payment_data = await StripeService.create_payment_intent(amount, order_id)
-        
-        # Update order with payment intent ID
-        order.payment_intent_id = payment_data['payment_intent_id']
-        order.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(order)
-        
-        return payment_data
+    def get_order_seat_assignments(session: Session, order_id: str) -> List[SeatOrder]:
+        """Get seat assignments for an order"""
+        statement = select(SeatOrder).where(SeatOrder.order_id == order_id)
+        return session.exec(statement).all()
     
-

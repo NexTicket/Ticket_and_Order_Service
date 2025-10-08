@@ -29,8 +29,10 @@ def get_redis_connection():
 # A single instance for your app to use
 redis_conn = get_redis_connection()
 
-# Define the cart expiration time in seconds (5 minutes)
-CART_EXPIRATION_SECONDS = 300
+# Define the order expiration time in seconds (5 minutes)
+ORDER_EXPIRATION_SECONDS = 300
+# Alias for backwards compatibility
+CART_EXPIRATION_SECONDS = ORDER_EXPIRATION_SECONDS
 
 # Test Redis connection
 def test_redis_connection():

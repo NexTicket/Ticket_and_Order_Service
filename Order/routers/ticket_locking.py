@@ -14,39 +14,42 @@ from Order.services.ticket_locking_service import TicketLockingService
 router = APIRouter()
 
 @router.post("/lock-seats", response_model=LockSeatsResponse, status_code=status.HTTP_201_CREATED)
-def lock_seats(
+async def lock_seats(
     request_data: LockSeatsRequest,
     current_user: dict = Depends(get_current_user_from_token),
     session: Session = Depends(get_session)
 ):
     """
     Lock seats for a verified user in Redis with automatic 5-minute expiration.
-    This creates a temporary cart that prevents other users from selecting the same seats.
+    This creates a temporary order that prevents other users from selecting the same seats.
+    Also creates a payment intent and updates the order in the database.
     """
     user_id = current_user['uid']
-    return TicketLockingService.lock_seats(session, user_id, request_data)
+    return await TicketLockingService.lock_seats(session, user_id, request_data)
 
 @router.post("/unlock-seats", response_model=UnlockSeatsResponse)
 def unlock_seats(
     request_data: UnlockSeatsRequest,
-    current_user: dict = Depends(get_current_user_from_token)
+    current_user: dict = Depends(get_current_user_from_token),
+    session: Session = Depends(get_session)
 ):
     """
-    Unlock seats for a user. Can unlock specific seats by cart_id/seat_ids or all user's locked seats.
+    Unlock seats for a user. Can unlock specific seats by order_id/seat_ids or all user's locked seats.
     """
     user_id = current_user['uid']
-    return TicketLockingService.unlock_seats(user_id, request_data)
+    return TicketLockingService.unlock_seats(session, user_id, request_data)
 
 @router.get("/locked-seats", response_model=Optional[GetLockedSeatsResponse])
 def get_locked_seats(
-    current_user: dict = Depends(get_current_user_from_token)
+    current_user: dict = Depends(get_current_user_from_token),
+    session: Session = Depends(get_session)
 ):
     """
     Get currently locked seats for the authenticated user.
     Returns None if no seats are currently locked or if the lock has expired.
     """
     user_id = current_user['uid']
-    return TicketLockingService.get_locked_seats(user_id)
+    return TicketLockingService.get_locked_seats(user_id, session)
 
 @router.post("/check-availability", response_model=SeatAvailabilityResponse)
 def check_seat_availability(
@@ -67,11 +70,11 @@ def extend_lock(
     current_user: dict = Depends(get_current_user_from_token)
 ):
     """
-    Extend the lock time for a user's cart by additional seconds (default 5 minutes).
+    Extend the lock time for a user's order by additional seconds (default 5 minutes).
     """
     user_id = current_user['uid']
     return TicketLockingService.extend_lock(
-        user_id, request_data.cart_id, request_data.additional_seconds
+        user_id, request_data.order_id, request_data.additional_seconds
     )
 
 @router.delete("/force-unlock/{event_id}/{seat_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -120,7 +123,7 @@ def get_locking_stats(
                     "seat_id": seat_id,
                     "user_id": lock_data['user_id'],
                     "expires_at": expires_at,
-                    "cart_id": lock_data['cart_id']
+                    "order_id": lock_data['order_id']
                 })
             else:
                 expired_locks += 1
