@@ -15,7 +15,7 @@ print(f"Stripe API initialized with key: {stripe_key[:4]}...{stripe_key[-4:] if 
 
 class StripeService:
     @staticmethod
-    async def create_payment_intent(amount: int, order_id: str) -> Dict[str, Any]:
+    async def create_payment_intent(amount: int, order_id: str, user_id: str) -> Dict[str, Any]:
 
         print(f"Creating payment intent for order_id: {order_id}, amount: {amount} cents")
         
@@ -43,7 +43,8 @@ class StripeService:
                     'enabled': True,
                 },
                 metadata={
-                    'order_id': order_id
+                    'order_id': order_id,
+                    'user_id': user_id
                 }
             )
             
