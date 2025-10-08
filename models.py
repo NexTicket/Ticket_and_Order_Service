@@ -251,6 +251,7 @@ class LockSeatsResponse(SQLModel):
     expires_in_seconds: int
     expires_at: datetime
     payment_intent_id: Optional[str] = None
+    client_secret: Optional[str] = None
 
 class UnlockSeatsRequest(SQLModel):
     order_id: Optional[str] = None  # If not provided, unlock all user's locked seats

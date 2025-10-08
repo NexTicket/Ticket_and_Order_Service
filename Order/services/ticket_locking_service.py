@@ -179,7 +179,8 @@ class TicketLockingService:
                     # Create Stripe payment intent directly
                     payment_data = await StripeService.create_payment_intent(
                         amount=stripe_amount, 
-                        order_id=order_id
+                        order_id=order_id,
+                        user_id=user_id
                     )
                     
                     # Debug payment data
@@ -234,8 +235,11 @@ class TicketLockingService:
             expires_at=expires_at
         )
         
-        if payment_intent_id:
+        client_secret = payment_data['client_secret']
+
+        if payment_intent_id and client_secret:
             response.payment_intent_id = payment_intent_id
+            response.client_secret = client_secret
         elif db_order and db_order.payment_intent_id:
             response.payment_intent_id = db_order.payment_intent_id
             
