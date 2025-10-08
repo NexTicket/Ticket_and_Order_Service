@@ -1,5 +1,6 @@
 import json
 import uuid
+import os
 from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
@@ -12,13 +13,15 @@ from models import (
     GetLockedSeatsResponse, SeatAvailabilityResponse, ExtendLockResponse, OrderStatus,
     SeatOrder, SeatOrderCreate
 )
+from Payment.services.stripe_service import StripeService
 
 class TicketLockingService:
     
     @staticmethod
-    def lock_seats(session: Session, user_id: str, request_data: LockSeatsRequest) -> LockSeatsResponse:
+    async def lock_seats(session: Session, user_id: str, request_data: LockSeatsRequest) -> LockSeatsResponse:
         """
         Lock seats for a user in Redis with automatic expiration.
+        Creates a payment intent and updates the order record.
         """
         # 1. Validate that the event exists and seats are potentially available
         TicketLockingService._validate_seat_availability(session, request_data.event_id, request_data.seat_ids)
@@ -156,14 +159,48 @@ class TicketLockingService:
                         seat_ids=json.dumps(seats)
                     )
                         session.add(seat_assignment)
-                
-                # Commit the seat assignments
                 session.commit()
             except Exception as e:
-                # If seat assignments fail, the order is still created, which is acceptable
-                # We can log the error but don't need to fail the entire transaction
                 print(f"Warning: Failed to create seat assignments: {e}")
-                # Continue with the process as the order was successfully created
+            
+            # Create payment intent with Stripe and update order
+            payment_intent_id = None
+            try:
+                # Get the order
+                db_order = session.get(UserOrder, order_id)
+                if db_order and db_order.status == OrderStatus.PENDING:
+                    # Stripe expects amounts in cents (smallest currency unit)
+                    # For LKR, multiply by 100 to convert from rupees to cents
+                    stripe_amount = int(total_amount * 100)  
+                    
+                    # Add debugging info
+                    print(f"Creating payment intent: Original amount: {total_amount} LKR, Stripe amount: {stripe_amount} cents")
+                    
+                    # Create Stripe payment intent directly
+                    payment_data = await StripeService.create_payment_intent(
+                        amount=stripe_amount, 
+                        order_id=order_id
+                    )
+                    
+                    # Debug payment data
+                    print(f"Payment data: {payment_data}")
+                    
+                    # Update order with payment intent ID
+                    if 'payment_intent_id' in payment_data:
+                        payment_intent_id = payment_data['payment_intent_id']
+                        db_order.payment_intent_id = payment_intent_id
+                        db_order.updated_at = datetime.now(timezone.utc)
+                        session.add(db_order)
+                        session.commit()
+                        session.refresh(db_order)
+                        print(f"Updated order with payment_intent_id: {payment_intent_id}")
+                    else:
+                        print(f"Error: 'payment_intent_id' not found in payment data: {payment_data}")
+                
+            except Exception as e:
+
+                print(f"Warning: Failed to create payment intent: {str(e)}")
+                
         except Exception as e:
             # If database update fails, clean up Redis locks
             try:
@@ -174,15 +211,21 @@ class TicketLockingService:
                     pipe.delete(f"seat_lock:{request_data.event_id}:{seat_id}")
                 pipe.execute()
             except:
-                pass  # Ignore cleanup errors
+                pass  
                 
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to create order in database: {e}"
             )
         
-        return LockSeatsResponse(
-            message="Order created successfully. Your selection will expire in 5 minutes.",
+        db_order = session.get(UserOrder, order_id)
+        
+        message = "Order created successfully. Your selection will expire in 5 minutes."
+        if payment_intent_id:
+            message += " Payment intent created."
+            
+        response = LockSeatsResponse(
+            message=message,
             order_id=order_id,
             user_id=user_id,
             seat_ids=request_data.seat_ids,
@@ -190,6 +233,13 @@ class TicketLockingService:
             expires_in_seconds=ORDER_EXPIRATION_SECONDS,
             expires_at=expires_at
         )
+        
+        if payment_intent_id:
+            response.payment_intent_id = payment_intent_id
+        elif db_order and db_order.payment_intent_id:
+            response.payment_intent_id = db_order.payment_intent_id
+            
+        return response
     
     @staticmethod
     def unlock_seats(session: Session, user_id: str, request_data: UnlockSeatsRequest) -> UnlockSeatsResponse:

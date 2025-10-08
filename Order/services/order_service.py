@@ -316,27 +316,3 @@ class OrderService:
         statement = select(SeatOrder).where(SeatOrder.order_id == order_id)
         return session.exec(statement).all()
     
-
-    
-    @staticmethod
-    async def create_payment_intent(session: Session, order_id: str, amount: int):
-        """Create payment intent and update order"""
-        order = OrderService.get_order(session, order_id)
-        if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
-        
-        if order.status != OrderStatus.PENDING:
-            raise HTTPException(status_code=400, detail="Order is not in pending status")
-        
-        # Create Stripe payment intent
-        payment_data = await StripeService.create_payment_intent(amount, order_id)
-        
-        # Update order with payment intent ID
-        order.payment_intent_id = payment_data['payment_intent_id']
-        order.updated_at = datetime.now(timezone.utc)
-        session.commit()
-        session.refresh(order)
-        
-        return payment_data
-    
-

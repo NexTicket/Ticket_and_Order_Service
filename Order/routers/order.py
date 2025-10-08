@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
 from typing import List, Optional
+from datetime import datetime, timezone
 from database import get_session
 from firebase_auth import get_current_user_from_token
 from models import (
@@ -99,14 +100,34 @@ async def create_payment_intent(
 ):
     """Create a Stripe payment intent for an order"""
     try:
-        payment_data = await OrderService.create_payment_intent(
-            session, request.orderId, request.amount
+        # Direct integration with StripeService to avoid circular imports
+        from Payment.services.stripe_service import StripeService
+        
+        # Get order to verify it exists and is pending
+        order = session.get(UserOrder, request.orderId)
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+            
+        if order.status != "PENDING":
+            raise HTTPException(status_code=400, detail="Order is not in pending status")
+            
+        # Create payment intent - convert amount to cents for Stripe
+        # Stripe requires minimum amount (usually 50 cents equivalent)
+        stripe_amount = int(request.amount * 100)  # Convert to cents
+        
+        payment_data = await StripeService.create_payment_intent(
+            amount=stripe_amount, 
+            order_id=request.orderId
         )
+        
+        # Update order with payment intent ID
+        order.payment_intent_id = payment_data['payment_intent_id']
+        order.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        
         return CreatePaymentIntentResponse(
             client_secret=payment_data['client_secret'],
             payment_intent_id=payment_data['payment_intent_id']
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-

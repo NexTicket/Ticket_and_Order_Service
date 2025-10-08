@@ -14,7 +14,7 @@ from Order.services.ticket_locking_service import TicketLockingService
 router = APIRouter()
 
 @router.post("/lock-seats", response_model=LockSeatsResponse, status_code=status.HTTP_201_CREATED)
-def lock_seats(
+async def lock_seats(
     request_data: LockSeatsRequest,
     current_user: dict = Depends(get_current_user_from_token),
     session: Session = Depends(get_session)
@@ -22,9 +22,10 @@ def lock_seats(
     """
     Lock seats for a verified user in Redis with automatic 5-minute expiration.
     This creates a temporary order that prevents other users from selecting the same seats.
+    Also creates a payment intent and updates the order in the database.
     """
     user_id = current_user['uid']
-    return TicketLockingService.lock_seats(session, user_id, request_data)
+    return await TicketLockingService.lock_seats(session, user_id, request_data)
 
 @router.post("/unlock-seats", response_model=UnlockSeatsResponse)
 def unlock_seats(
