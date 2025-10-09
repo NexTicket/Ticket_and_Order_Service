@@ -115,22 +115,43 @@ class OrderService:
         return db_order
     
     @staticmethod
-    async def complete_order(session: Session, order_id: str, payment_intent_id: str, firebase_uid: str) -> UserOrder:
+    async def complete_order(session: Session, order_id: str, payment_intent_id: str) -> UserOrder:
         """Complete order from Redis cart data"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        logger.info(f"Starting order completion for order_id: {order_id}")
+        
         order = session.get(UserOrder, order_id)
         if not order:
+            logger.error(f"Order {order_id} not found")
             raise HTTPException(status_code=404, detail="Order not found")
         
+        logger.info(f"Found order {order_id} with status {order.status}")
+        
         if order.status != OrderStatus.PENDING:
-            raise HTTPException(status_code=400, detail="Order is not in pending status")
+            logger.error(f"Order {order_id} is in {order.status} status, not PENDING")
+            raise HTTPException(status_code=400, detail=f"Order is not in pending status (current: {order.status})")
+        
+        # Special case for webhook handling: if this order is already completed, return it
+        if order.status == OrderStatus.COMPLETED and order.stripe_payment_id == payment_intent_id:
+            logger.info(f"Order {order_id} was already completed with same payment intent")
+            return order
         
         # Verify payment intent ID matches
-        if order.payment_intent_id != payment_intent_id:
-            raise HTTPException(status_code=400, detail="Payment intent ID mismatch")
+        stored_payment_intent_id = order.payment_intent_id
+        logger.info(f"Comparing payment intent IDs: stored={stored_payment_intent_id}, received={payment_intent_id}")
+        
+        # For webhook handling, we'll be lenient if the payment intent ID isn't set in the order yet
+        if stored_payment_intent_id and stored_payment_intent_id != payment_intent_id:
+            logger.error(f"Payment intent ID mismatch: {stored_payment_intent_id} != {payment_intent_id}")
+            raise HTTPException(status_code=400, detail=f"Payment intent ID mismatch")
         
         # Verify payment with Stripe
+        logger.info(f"Verifying payment success with Stripe")
         is_payment_successful = await StripeService.verify_payment_success(payment_intent_id)
         if not is_payment_successful:
+            logger.error(f"Payment verification failed for intent {payment_intent_id}")
             raise HTTPException(status_code=400, detail="Payment not successful")
         
         # Get seat assignments from the OrderSeatAssignment table first
@@ -230,8 +251,8 @@ class OrderService:
             transaction.transaction_reference = payment_intent_id
             session.add(transaction)
         
-        # Clear Redis order (no need to cancel order since we're completing it)
-        TicketLockingService._cleanup_user_locks(firebase_uid)
+        # Clear Redis order using order_id instead of firebase_uid
+        #TicketLockingService.clear_order_by_id(order_id)
         
         session.commit()
         session.refresh(order)

@@ -34,23 +34,6 @@ def add_payment_to_order(
         session, firebase_uid, request.payment_method
     )
 
-@router.post("/{order_id}/complete", response_model=UserOrderRead)
-async def complete_order(
-    order_id: int,
-    request: CompleteOrderRequest,
-    current_user: dict = Depends(get_current_user_from_token),
-    session: Session = Depends(get_session)
-):
-    """Complete order with payment verification, create user tickets and clean up Redis data"""
-    try:
-        firebase_uid = current_user['uid']
-        order = await OrderService.complete_order(
-            session, order_id, request.paymentIntentId, firebase_uid
-        )
-        return UserOrderRead.model_validate(order)
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
 @router.post("/{order_id}/cancel", response_model=UserOrderRead)
 def cancel_order(order_id: int, session: Session = Depends(get_session)):
     """Cancel an order"""

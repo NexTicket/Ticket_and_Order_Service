@@ -580,3 +580,49 @@ class TicketLockingService:
         # Fall back to old cart format for compatibility during transition
         legacy_data = redis_conn.hgetall(f"cart:{user_id}")
         return legacy_data if legacy_data else None
+        
+    @staticmethod
+    def clear_order_by_id(order_id: str) -> None:
+        """
+        Clear Redis data for a specific order ID.
+        This is used when completing an order to ensure all Redis locks are removed.
+        """
+        # Find all keys in Redis that match the order pattern
+        # First, scan for user orders that contain this order_id
+        for key in redis_conn.scan_iter(match="order:*"):
+            order_data = redis_conn.hgetall(key)
+            if order_data and order_data.get('order_id') == order_id:
+                user_id = order_data.get('user_id')
+                event_id = order_data.get('event_id')
+                seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+                
+                # Delete user's order
+                redis_conn.delete(key)
+                
+                # Also delete individual seat locks
+                if event_id and seat_ids:
+                    for seat_id in seat_ids:
+                        seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+                        redis_conn.delete(seat_lock_key)
+                        
+                # No need to continue scanning once we found the order
+                break
+        
+        # Also check legacy cart format
+        for key in redis_conn.scan_iter(match="cart:*"):
+            order_data = redis_conn.hgetall(key)
+            if order_data and order_data.get('order_id') == order_id:
+                user_id = order_data.get('user_id')
+                event_id = order_data.get('event_id')
+                seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+                
+                # Delete user's cart
+                redis_conn.delete(key)
+                
+                # Also delete individual seat locks
+                if event_id and seat_ids:
+                    for seat_id in seat_ids:
+                        seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+                        redis_conn.delete(seat_lock_key)
+                
+                break

@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import create_db_and_tables
 from Ticket.routers import ticket, venue_event
 from Order.routers import order, transaction, analytics, ticket_locking
+from Payment.routers import stripe_webhook
 import os
 import logging
 from dotenv import load_dotenv
@@ -140,3 +141,7 @@ app.include_router(order.router, prefix="/api/orders", tags=["Orders"])
 app.include_router(transaction.router, prefix="/api/transactions", tags=["Transactions"])
 app.include_router(analytics.router, prefix="/api/analytics", tags=["Analytics"])
 app.include_router(ticket_locking.router, prefix="/api/ticket-locking", tags=["Ticket Locking"])
+
+
+# Add stripe webhook router without any prefix so the webhook is available at /webhooks/stripe
+app.include_router(stripe_webhook.router, prefix="/api", tags=["Stripe Webhooks"])
