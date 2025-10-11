@@ -143,7 +143,7 @@ class UserOrder(UserOrderBase, table=True):
     
     # Relationships
     user_tickets: List["UserTicket"] = Relationship(back_populates="order")
-    transactions: List["Transaction"] = Relationship(back_populates="order")
+    transactions: List["Transactions"] = Relationship(back_populates="order")
 
 class UserOrderCreate(UserOrderBase):
     pass
@@ -188,14 +188,14 @@ class UserTicketRead(UserTicketBase):
     created_at: datetime
 
 # Transaction Model
-class TransactionBase(SQLModel):
+class TransactionsBase(SQLModel):
     order_id: str = Field(foreign_key="userorder.id")
     amount: float = Field(ge=0)
     payment_method: str
     transaction_reference: Optional[str] = None
     status: TransactionStatus = TransactionStatus.PENDING
 
-class Transaction(TransactionBase, table=True):
+class Transactions(TransactionsBase, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     transaction_id: str = Field(default_factory=lambda: f"TXN-{uuid.uuid4().hex[:8].upper()}", unique=True, index=True)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -204,15 +204,15 @@ class Transaction(TransactionBase, table=True):
     # Relationships
     order: UserOrder = Relationship(back_populates="transactions")
 
-class TransactionCreate(TransactionBase):
+class TransactionsCreate(TransactionsBase):
     pass
 
-class TransactionRead(TransactionBase):
+class TransactionsRead(TransactionsBase):
     id: int
     transaction_id: str
     created_at: datetime
 
-class TransactionUpdate(SQLModel):
+class TransactionsUpdate(SQLModel):
     status: Optional[TransactionStatus] = None
     transaction_reference: Optional[str] = None
 

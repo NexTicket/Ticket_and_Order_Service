@@ -3,7 +3,7 @@ from sqlmodel import Session, select, func
 from typing import Dict, Any, List
 from database import get_session
 from models import (
-    UserOrder, UserTicket, Transaction, BulkTicket, Event, Venue,
+    UserOrder, UserTicket, Transactions, BulkTicket, Event, Venue,
     OrderStatus, TransactionStatus, TicketStatus
 )
 from datetime import datetime, timedelta
