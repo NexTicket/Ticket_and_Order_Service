@@ -4,10 +4,16 @@ import logging
 from fastapi import APIRouter, Request, HTTPException, Header, Depends
 from sqlmodel import Session
 from typing import Dict, Any
+import os
+import logging
+import traceback
+import stripe
+import json
 
 from database import get_session
 from Order.services.order_service import OrderService
-from models import OrderStatus
+from Order.services.transaction_service import TransactionService
+from models import OrderStatus, TransactionStatus
 from Payment.services.stripe_service import StripeService
 from dotenv import load_dotenv
 
@@ -134,7 +140,37 @@ async def stripe_webhook(
             # Complete the order using the existing complete_order method
             logger.info(f"Processing order completion for order_id: {order_id}, payment_intent_id: {payment_intent_id}")
             
+            # Create a transaction record for this payment
             try:
+                # First, create a transaction record using TransactionService
+                logger.info(f"Creating transaction record for order: {order_id}")
+                order = OrderService.get_order(session, order_id)
+                if order:
+                    # Create a transaction or update existing one if it exists
+                    existing_transactions = TransactionService.get_order_transactions(session, order_id)
+                    
+                    if existing_transactions:
+                        # Update the existing transaction status
+                        for transaction in existing_transactions:
+                            TransactionService.update_transaction_status(
+                                session=session,
+                                transaction_id=transaction.transaction_id,
+                                status=TransactionStatus.SUCCESS,
+                                transaction_reference=f"Payment successful: {payment_intent_id}"
+                            )
+                    else:
+                        # Create a new transaction if none exists
+                        TransactionService.create_transaction(
+                            session=session,
+                            order_id=order_id,
+                            amount=order.total_amount,
+                            payment_method="stripe",
+                            transaction_reference=f"Payment successful: {payment_intent_id}",
+                            status=TransactionStatus.SUCCESS
+                        )
+                    logger.info(f"Transaction record created/updated successfully for order: {order_id}")
+                
+                # Then complete the order
                 completed_order = await OrderService.complete_order(
                     session=session, 
                     order_id=order_id,
@@ -165,6 +201,32 @@ async def stripe_webhook(
         if order_id:
             logger.info(f"Payment failed for order {order_id}")
             try:
+                # Get the order to create a failed transaction
+                order = OrderService.get_order(session, order_id)
+                if order:
+                    # Create or update transaction record for the failed payment
+                    existing_transactions = TransactionService.get_order_transactions(session, order_id)
+                    
+                    if existing_transactions:
+                        # Update the existing transaction status
+                        for transaction in existing_transactions:
+                            TransactionService.update_transaction_status(
+                                session=session,
+                                transaction_id=transaction.transaction_id,
+                                status=TransactionStatus.FAILED,
+                                transaction_reference="Payment failed"
+                            )
+                    else:
+                        # Create a new transaction for the failed payment
+                        TransactionService.create_transaction(
+                            session=session,
+                            order_id=order_id,
+                            amount=order.total_amount,
+                            payment_method="stripe",
+                            transaction_reference="Payment failed",
+                            status=TransactionStatus.FAILED
+                        )
+                
                 # Cancel the order
                 OrderService.cancel_order(session, order_id)
                 logger.info(f"Order {order_id} cancelled due to payment failure")

@@ -5,15 +5,19 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Dict, Any
 from fastapi import HTTPException, status
 from sqlmodel import Session, select
+import json
+import logging
+import uuid
 
 from Database.redis_client import redis_conn, CART_EXPIRATION_SECONDS as ORDER_EXPIRATION_SECONDS
 from models import (
     BulkTicket, UserTicket, UserOrder, UserOrderCreate,
     LockSeatsRequest, LockSeatsResponse, UnlockSeatsRequest, UnlockSeatsResponse,
     GetLockedSeatsResponse, SeatAvailabilityResponse, ExtendLockResponse, OrderStatus,
-    SeatOrder, SeatOrderCreate
+    SeatOrder, SeatOrderCreate, TransactionStatus
 )
 from Payment.services.stripe_service import StripeService
+from Order.services.transaction_service import TransactionService
 
 class TicketLockingService:
     
@@ -145,6 +149,16 @@ class TicketLockingService:
             # Commit the order first to ensure it exists for foreign key references
             session.commit()
             session.refresh(db_order)
+            
+            # Create a transaction record for the initial ticket locking/reservation
+            TransactionService.create_transaction(
+                session=session,
+                order_id=order_id,
+                amount=total_amount,
+                payment_method="reservation",
+                transaction_reference="Tickets locked/reserved",
+                status=TransactionStatus.PENDING
+            )
             
             # Create OrderSeatAssignment records for each bulk ticket
             try:

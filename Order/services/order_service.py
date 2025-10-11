@@ -3,15 +3,17 @@ from sqlmodel import Session, select
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone
 import json
+import logging
 from models import (
     UserOrder, UserOrderCreate, UserOrderRead, UserOrderUpdate,
-    UserTicket, Transaction, TransactionCreate,
+    UserTicket, Transactions, TransactionsCreate,
     BulkTicket, OrderStatus, TransactionStatus,
     RedisOrderItem, OrderSummaryResponse,
     SeatOrder, SeatOrderCreate
 )
 from Ticket.services.ticket_service import TicketService
 from Order.services.ticket_locking_service import TicketLockingService
+from Order.services.transaction_service import TransactionService
 from Payment.services.stripe_service import StripeService
 from Database.redis_client import redis_conn
 
@@ -94,17 +96,18 @@ class OrderService:
         if db_order.firebase_uid != firebase_uid:
             raise HTTPException(status_code=403, detail="Order belongs to another user")
         
-        # Create transaction for the order
-        transaction_data = TransactionCreate(
+        # Create transaction for the order using transaction service
+        transaction = TransactionService.create_transaction(
+            session=session,
             order_id=db_order.id,
             amount=db_order.total_amount,
             payment_method=payment_method,
+            transaction_reference="Payment initiated",
             status=TransactionStatus.PENDING
         )
         
-        db_transaction = Transaction.model_validate(transaction_data)
-        session.add(db_transaction)
-        session.commit()
+        if not transaction:
+            raise HTTPException(status_code=500, detail="Failed to create transaction record")
         
         # Update order updated_at timestamp
         db_order.updated_at = datetime.now(timezone.utc)
@@ -116,12 +119,16 @@ class OrderService:
     
     @staticmethod
     async def complete_order(session: Session, order_id: str, payment_intent_id: str) -> UserOrder:
-        """Complete order from Redis cart data"""
+        """
+        Securely completes an order after successful payment, creating one ticket per seat
+        in a single atomic transaction.
+        """
         import logging
         logger = logging.getLogger(__name__)
         
-        logger.info(f"Starting order completion for order_id: {order_id}")
+        logger.info(f"Starting atomic order completion for order_id: {order_id}")
         
+        # 1. Fetch the Order and perform initial validation.
         order = session.get(UserOrder, order_id)
         if not order:
             logger.error(f"Order {order_id} not found")
@@ -130,13 +137,12 @@ class OrderService:
         logger.info(f"Found order {order_id} with status {order.status}")
         
         if order.status != OrderStatus.PENDING:
+            # Idempotency check: If it's already completed with the same payment, it's a success.
+            if order.status == OrderStatus.COMPLETED and order.stripe_payment_id == payment_intent_id:
+                logger.warning(f"Webhook re-delivery: Order {order_id} already completed.")
+                return order
             logger.error(f"Order {order_id} is in {order.status} status, not PENDING")
             raise HTTPException(status_code=400, detail=f"Order is not in pending status (current: {order.status})")
-        
-        # Special case for webhook handling: if this order is already completed, return it
-        if order.status == OrderStatus.COMPLETED and order.stripe_payment_id == payment_intent_id:
-            logger.info(f"Order {order_id} was already completed with same payment intent")
-            return order
         
         # Verify payment intent ID matches
         stored_payment_intent_id = order.payment_intent_id
@@ -154,60 +160,62 @@ class OrderService:
             logger.error(f"Payment verification failed for intent {payment_intent_id}")
             raise HTTPException(status_code=400, detail="Payment not successful")
         
-        # Get seat assignments from the OrderSeatAssignment table first
-        seat_assignments = OrderService.get_order_seat_assignments(session, order_id)
+        # 2. Fetch all seat assignments for this order
+        seat_assignments = session.exec(
+            select(SeatOrder).where(SeatOrder.order_id == order_id)
+        ).all()
         
         if not seat_assignments:
+            logger.error(f"FATAL: No SeatOrder records found for pending order {order_id}.")
+            
             # Fall back to getting seat assignments from order notes if not found in table
             if not order.notes:
-                raise HTTPException(status_code=400, detail="No seat assignment data found in order")
+                raise HTTPException(status_code=400, detail="Cannot complete order: seat assignment data is missing.")
             
             try:
+                # Note: This fallback is deprecated and will eventually be removed
+                logger.warning(f"Falling back to order notes for seat assignments in order {order_id}")
                 order_data = json.loads(order.notes)
                 seat_assignments_dict = order_data.get("seat_assignments", {})
                 if not seat_assignments_dict:
                     raise HTTPException(status_code=400, detail="No seat assignments found in order notes")
                 
-                # Process seat assignments from order notes
-                user_tickets = []
-                for bulk_ticket_id, seat_ids in seat_assignments_dict.items():
-                    bulk_ticket = session.get(BulkTicket, int(bulk_ticket_id))
-                    if not bulk_ticket:
-                        raise HTTPException(status_code=404, detail=f"Bulk ticket {bulk_ticket_id} not found")
-                    
-                    for seat_id in seat_ids:
-                        # Create individual user ticket
-                        user_ticket = UserTicket(
-                            order_id=order.id,
-                            bulk_ticket_id=bulk_ticket.id,
-                            firebase_uid=order.firebase_uid,
-                            seat_id=seat_id,
-                            price_paid=bulk_ticket.price,
-                            status="sold"
-                        )
-                        
-                        # Generate QR code data
-                        qr_data = {
-                            "ticket_id": f"temp_{order.id}_{seat_id}",
-                            "event_id": bulk_ticket.event_id,
-                            "venue_id": bulk_ticket.venue_id,
-                            "seat_id": seat_id,
-                            "firebase_uid": order.firebase_uid,
-                            "order_ref": order.order_reference
-                        }
+                # We would process from notes here, but this approach is deprecated
+                # and better to fail properly than use potentially inconsistent data
+                raise HTTPException(status_code=400, detail="Using seat assignments from order notes is no longer supported")
             except json.JSONDecodeError:
                 raise HTTPException(status_code=400, detail="Invalid order data format")
-        else:
-            # Process seat assignments from OrderSeatAssignment table
-            user_tickets = []
+        
+        # 3. Efficiently pre-fetch all needed BulkTicket records to avoid queries in a loop
+        bulk_ticket_ids = {sa.bulk_ticket_id for sa in seat_assignments}
+        bulk_tickets_query = session.exec(
+            select(BulkTicket).where(BulkTicket.id.in_(bulk_ticket_ids))
+        ).all()
+        bulk_tickets_map = {bt.id: bt for bt in bulk_tickets_query}
+        
+        try:
+            # 4. Loop through each assignment and each seat to create individual UserTickets
             for seat_assignment in seat_assignments:
-                bulk_ticket = session.get(BulkTicket, seat_assignment.bulk_ticket_id)
+                bulk_ticket = bulk_tickets_map.get(seat_assignment.bulk_ticket_id)
                 if not bulk_ticket:
-                    continue
+                    logger.error(f"BulkTicket ID {seat_assignment.bulk_ticket_id} not found for order {order_id}.")
+                    raise ValueError(f"Configuration error: BulkTicket not found.")  # Internal error
                 
-                seat_ids = json.loads(seat_assignment.seat_ids)
+                try:
+                    seat_ids = json.loads(seat_assignment.seat_ids)
+                except json.JSONDecodeError:
+                    logger.error(f"Invalid seat_ids JSON for SeatOrder {seat_assignment.id}.")
+                    raise ValueError("Invalid seat data.")
+                
+                # Check if there are enough available seats before processing
+                if bulk_ticket.available_seats < len(seat_ids):
+                    logger.error(f"Overselling detected for BulkTicket {bulk_ticket.id}! "
+                                f"Required: {len(seat_ids)}, Available: {bulk_ticket.available_seats}")
+                    raise HTTPException(status_code=409, detail="Not enough available seats to complete the order.")
+                
+                # Process each seat individually
                 for seat_id in seat_ids:
-                    # Create individual user ticket
+                    # Create one UserTicket per seat
                     user_ticket = UserTicket(
                         order_id=order.id,
                         bulk_ticket_id=bulk_ticket.id,
@@ -217,44 +225,66 @@ class OrderService:
                         status="sold"
                     )
                     
-                    # Generate QR code data
+                    # Generate unique QR code data for this specific ticket
                     qr_data = {
-                        "ticket_id": f"temp_{order.id}_{seat_id}",
+                        "ticket_id": f"ticket_{order.id}_{seat_id}",
                         "event_id": bulk_ticket.event_id,
                         "venue_id": bulk_ticket.venue_id,
                         "seat_id": seat_id,
                         "firebase_uid": order.firebase_uid,
                         "order_ref": order.order_reference
                     }
-                user_ticket.qr_code_data = json.dumps(qr_data)
-                
-                session.add(user_ticket)
-                user_tickets.append(user_ticket)
-                
-                # Decrease available seats
-                bulk_ticket.available_seats -= 1
-                session.add(bulk_ticket)
+                    user_ticket.qr_code_data = json.dumps(qr_data)
+                    
+                    session.add(user_ticket)
+                    
+                    # Decrement available seat count for each ticket created
+                    bulk_ticket.available_seats -= 1
+            
+            # 5. Finalize the order and transaction details
+            order.status = OrderStatus.COMPLETED
+            order.stripe_payment_id = payment_intent_id
+            order.completed_at = datetime.now(timezone.utc)
+            order.updated_at = datetime.now(timezone.utc)
+            session.add(order)
+            
+            # Update transaction status or create a new transaction if none exists
+            transaction = session.exec(
+                select(Transactions).where(Transactions.order_id == order_id)
+            ).first()
+            
+            if transaction:
+                # Update existing transaction using transaction service
+                TransactionService.update_transaction_status(
+                    session=session,
+                    transaction_id=transaction.transaction_id,
+                    status=TransactionStatus.SUCCESS,
+                    transaction_reference=f"Payment completed: {payment_intent_id}"
+                )
+                logger.info(f"Updated existing transaction for order {order_id}")
+            else:
+                # Create a new transaction if none exists using transaction service
+                logger.info(f"No transaction found for order {order_id}, creating one")
+                TransactionService.create_transaction(
+                    session=session,
+                    order_id=order_id,
+                    amount=order.total_amount,
+                    payment_method="stripe",
+                    status=TransactionStatus.SUCCESS,
+                    transaction_reference=f"Payment completed: {payment_intent_id}"
+                )
+                logger.info(f"Created new transaction for order {order_id}")
+            
+            # 6. Commit all changes to the database at once
+            session.commit()
+            logger.info(f"Successfully completed order {order_id} and committed to database.")
+            
+        except Exception as e:
+            logger.error(f"An error occurred during transaction for order {order_id}. Rolling back. Error: {e}")
+            session.rollback()  # Rollback all changes if any step failed
+            raise HTTPException(status_code=500, detail=f"Failed to complete order due to an internal error: {str(e)}")
         
-        # Update order with completion details
-        order.status = OrderStatus.COMPLETED
-        order.stripe_payment_id = payment_intent_id
-        order.completed_at = datetime.now(timezone.utc)
-        order.updated_at = datetime.now(timezone.utc)
-        session.add(order)
-        
-        # Update transaction status
-        transaction = session.exec(
-            select(Transaction).where(Transaction.order_id == order_id)
-        ).first()
-        if transaction:
-            transaction.status = TransactionStatus.SUCCESS
-            transaction.transaction_reference = payment_intent_id
-            session.add(transaction)
-        
-        # Clear Redis order using order_id instead of firebase_uid
-        #TicketLockingService.clear_order_by_id(order_id)
-        
-        session.commit()
+        # Refresh the object to reflect committed changes
         session.refresh(order)
         
         return order
@@ -273,14 +303,29 @@ class OrderService:
         order.updated_at = datetime.now(timezone.utc)
         session.add(order)
         
-        # Update transaction status
+        # Update transaction status or create a new one for the cancellation
         transaction = session.exec(
-            select(Transaction).where(Transaction.order_id == order_id)
+            select(Transactions).where(Transactions.order_id == order_id)
         ).first()
+        
         if transaction:
-            transaction.status = TransactionStatus.FAILED
-            transaction.updated_at = datetime.now(timezone.utc)
-            session.add(transaction)
+            # Update existing transaction using transaction service
+            TransactionService.update_transaction_status(
+                session=session,
+                transaction_id=transaction.transaction_id,
+                status=TransactionStatus.FAILED,
+                transaction_reference="Order cancelled"
+            )
+        else:
+            # Create a new transaction for the cancellation using transaction service
+            TransactionService.create_transaction(
+                session=session,
+                order_id=order_id,
+                amount=order.total_amount,
+                payment_method="system",
+                status=TransactionStatus.FAILED,
+                transaction_reference="Order cancelled"
+            )
         
         # We don't need to modify seat assignments when cancelling the order
         # They remain as a record of what seats were initially assigned
@@ -317,7 +362,7 @@ class OrderService:
         tickets = OrderService.get_order_tickets(session, order_id)
         
         transactions = session.exec(
-            select(Transaction).where(Transaction.order_id == order_id)
+            select(Transactions).where(Transactions.order_id == order_id)
         ).all()
         
         seat_assignments = session.exec(

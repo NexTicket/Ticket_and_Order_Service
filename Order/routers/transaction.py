@@ -3,14 +3,14 @@ from sqlmodel import Session, select
 from typing import List
 from database import get_session
 from models import (
-    Transaction, TransactionCreate, TransactionRead, TransactionUpdate,
+    Transactions, TransactionsCreate, TransactionsRead, TransactionsUpdate,
     UserOrder, OrderStatus, TransactionStatus
 )
 
 router = APIRouter()
 
-@router.post("/", response_model=TransactionRead, status_code=status.HTTP_201_CREATED)
-def create_transaction(transaction: TransactionCreate, session: Session = Depends(get_session)):
+@router.post("/", response_model=TransactionsRead, status_code=status.HTTP_201_CREATED)
+def create_transaction(transaction: TransactionsCreate, session: Session = Depends(get_session)):
     """Create a new transaction"""
     # Check if order exists
     order = session.get(UserOrder, transaction.order_id)
@@ -23,13 +23,13 @@ def create_transaction(transaction: TransactionCreate, session: Session = Depend
             detail=f"Cannot create transaction for order with status: {order.status}"
         )
     
-    db_transaction = Transaction.model_validate(transaction)
+    db_transaction = Transactions.model_validate(transaction)
     session.add(db_transaction)
     session.commit()
     session.refresh(db_transaction)
     return db_transaction
 
-@router.get("/", response_model=List[TransactionRead])
+@router.get("/", response_model=List[TransactionsRead])
 def get_transactions(
     skip: int = 0, 
     limit: int = 100,
@@ -38,32 +38,32 @@ def get_transactions(
     session: Session = Depends(get_session)
 ):
     """Get all transactions with optional filtering"""
-    statement = select(Transaction).offset(skip).limit(limit)
+    statement = select(Transactions).offset(skip).limit(limit)
     
     if order_id:
-        statement = statement.where(Transaction.order_id == order_id)
+        statement = statement.where(Transactions.order_id == order_id)
     if status:
-        statement = statement.where(Transaction.status == status)
+        statement = statement.where(Transactions.status == status)
     
     transactions = session.exec(statement).all()
     return transactions
 
-@router.get("/{transaction_id}", response_model=TransactionRead)
+@router.get("/{transaction_id}", response_model=TransactionsRead)
 def get_transaction(transaction_id: int, session: Session = Depends(get_session)):
     """Get a specific transaction by ID"""
-    transaction = session.get(Transaction, transaction_id)
+    transaction = session.get(Transactions, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return transaction
 
-@router.put("/{transaction_id}", response_model=TransactionRead)
+@router.put("/{transaction_id}", response_model=TransactionsRead)
 def update_transaction(
     transaction_id: int,
-    transaction_update: TransactionUpdate,
+    transaction_update: TransactionsUpdate,
     session: Session = Depends(get_session)
 ):
     """Update a transaction"""
-    transaction = session.get(Transaction, transaction_id)
+    transaction = session.get(Transactions, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     
@@ -84,14 +84,14 @@ def update_transaction(
     
     return transaction
 
-@router.patch("/{transaction_id}/status", response_model=TransactionRead)
+@router.patch("/{transaction_id}/status", response_model=TransactionsRead)
 def update_transaction_status(
     transaction_id: int,
     new_status: TransactionStatus,
     session: Session = Depends(get_session)
 ):
     """Update transaction status"""
-    transaction = session.get(Transaction, transaction_id)
+    transaction = session.get(Transactions, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     
@@ -112,10 +112,10 @@ def update_transaction_status(
     
     return transaction
 
-@router.post("/{transaction_id}/refund", response_model=TransactionRead)
+@router.post("/{transaction_id}/refund", response_model=TransactionsRead)
 def process_refund(transaction_id: int, session: Session = Depends(get_session)):
     """Process a refund for a transaction"""
-    transaction = session.get(Transaction, transaction_id)
+    transaction = session.get(Transactions, transaction_id)
     if not transaction:
         raise HTTPException(status_code=404, detail="Transaction not found")
     
@@ -139,13 +139,13 @@ def process_refund(transaction_id: int, session: Session = Depends(get_session))
     
     return transaction
 
-@router.get("/order/{order_id}", response_model=List[TransactionRead])
+@router.get("/order/{order_id}", response_model=List[TransactionsRead])
 def get_order_transactions(order_id: int, session: Session = Depends(get_session)):
     """Get all transactions for a specific order"""
     order = session.get(UserOrder, order_id)
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     
-    statement = select(Transaction).where(Transaction.order_id == order_id)
+    statement = select(Transactions).where(Transactions.order_id == order_id)
     transactions = session.exec(statement).all()
     return transactions
