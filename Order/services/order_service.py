@@ -5,18 +5,18 @@ from datetime import datetime, timezone
 import json
 import logging
 from models import (
-    UserOrder, UserOrderCreate, UserOrderRead, UserOrderUpdate,
-    UserTicket, Transactions, TransactionsCreate,
+    UserOrder,
+    UserTicket, Transactions,
     BulkTicket, OrderStatus, TransactionStatus,
     RedisOrderItem, OrderSummaryResponse,
-    SeatOrder, SeatOrderCreate
+    SeatOrder
 )
 from Ticket.services.ticket_service import TicketService
 from Order.services.ticket_locking_service import TicketLockingService
 from Order.services.transaction_service import TransactionService
 from Payment.services.stripe_service import StripeService
 from Database.redis_client import redis_conn
-from kafka.kafka_producer import send_notification_message, send_message
+from kafka.kafka_producer import send_message
 
 class OrderService:
     
