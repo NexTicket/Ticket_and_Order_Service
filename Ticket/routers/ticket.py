@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
 from typing import List
 from database import get_session
+from firebase_auth import get_current_user_from_token
 from models import (
     UserTicket, UserTicketRead, 
     BulkTicket, BulkTicketRead,
@@ -11,22 +12,44 @@ from Ticket.services.ticket_service import TicketService
 
 router = APIRouter()
 
-@router.get("/user/{user_id}/tickets", response_model=List[UserTicketRead])
-def get_user_tickets(user_id: int, session: Session = Depends(get_session)):
-    """Get all tickets owned by a user"""
-    return TicketService.get_user_tickets(session, user_id)
+@router.get("/user/tickets")
+def get_user_tickets(
+    current_user: dict = Depends(get_current_user_from_token),
+    session: Session = Depends(get_session)
+):
+    """Get all tickets owned by a user with order_id, qr_code_data, and bulk ticket details"""
+    firebase_uid = current_user['uid']
+    return TicketService.get_user_tickets(session, firebase_uid)
 
 @router.get("/user-ticket/{ticket_id}")
-def get_ticket_details(ticket_id: int, session: Session = Depends(get_session)):
+def get_ticket_details(
+    ticket_id: int, 
+    current_user: dict = Depends(get_current_user_from_token),
+    session: Session = Depends(get_session)
+):
     """Get ticket with full event and venue details"""
-    return TicketService.get_ticket_with_details(session, ticket_id)
+    firebase_uid = current_user['uid']
+    return TicketService.get_ticket_with_details(session, ticket_id, firebase_uid)
 
 @router.get("/user-ticket/{ticket_id}/qr-data")
-def get_ticket_qr_data(ticket_id: int, session: Session = Depends(get_session)):
+def get_ticket_qr_data(
+    ticket_id: int, 
+    current_user: dict = Depends(get_current_user_from_token),
+    session: Session = Depends(get_session)
+):
     """Get QR code data for a specific ticket"""
+    firebase_uid = current_user['uid']
     ticket = session.get(UserTicket, ticket_id)
+    
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    
+    # Ensure the user owns this ticket
+    if ticket.firebase_uid != firebase_uid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="You don't have permission to access this ticket"
+        )
     
     return {
         "ticket_id": ticket_id,

@@ -159,17 +159,51 @@ class TicketService:
         return user_tickets
     
     @staticmethod
-    def get_user_tickets(session: Session, firebase_uid: str) -> List[UserTicket]:
-        """Get all tickets owned by a user"""
+    def get_user_tickets(session: Session, firebase_uid: str) -> List[dict]:
+        """Get all tickets owned by a user with order_id, qr_code_data, and bulk ticket details"""
         statement = select(UserTicket).where(UserTicket.firebase_uid == firebase_uid)
-        return session.exec(statement).all()
+        user_tickets = session.exec(statement).all()
+        
+        result = []
+        for ticket in user_tickets:
+            bulk_ticket = session.get(BulkTicket, ticket.bulk_ticket_id)
+            event = session.get(Event, bulk_ticket.event_id)
+            venue = session.get(Venue, bulk_ticket.venue_id)
+            
+            ticket_details = {
+                "id": ticket.id,
+                "order_id": ticket.order_id,
+                "qr_code_data": ticket.qr_code_data,
+                "seat_id": ticket.seat_id,
+                "price_paid": ticket.price_paid,
+                "status": ticket.status,
+                "created_at": ticket.created_at,
+                "bulk_ticket": {
+                    "id": bulk_ticket.id,
+                    "event_id": bulk_ticket.event_id,
+                    "venue_id": bulk_ticket.venue_id,
+                    "seat_type": bulk_ticket.seat_type,
+                    "price": bulk_ticket.price,
+                    "seat_prefix": bulk_ticket.seat_prefix
+                }
+            }
+            result.append(ticket_details)
+            
+        return result
     
     @staticmethod
-    def get_ticket_with_details(session: Session, ticket_id: int) -> dict:
+    def get_ticket_with_details(session: Session, ticket_id: int, firebase_uid: str) -> dict:
         """Get ticket with full event and venue details"""
         ticket = session.get(UserTicket, ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        
+        # Security check: Ensure the user owns this ticket
+        if ticket.firebase_uid != firebase_uid:
+            raise HTTPException(
+                status_code=403, 
+                detail="You don't have permission to access this ticket"
+            )
         
         bulk_ticket = session.get(BulkTicket, ticket.bulk_ticket_id)
         event = session.get(Event, bulk_ticket.event_id)
