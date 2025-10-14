@@ -16,6 +16,7 @@ from Order.services.ticket_locking_service import TicketLockingService
 from Order.services.transaction_service import TransactionService
 from Payment.services.stripe_service import StripeService
 from Database.redis_client import redis_conn
+from kafka.kafka_producer import send_notification_message, send_message
 
 class OrderService:
     
@@ -194,6 +195,9 @@ class OrderService:
         bulk_tickets_map = {bt.id: bt for bt in bulk_tickets_query}
         
         try:
+            # Create a list to collect QR codes for notification
+            qr_codes = []
+            
             # 4. Loop through each assignment and each seat to create individual UserTickets
             for seat_assignment in seat_assignments:
                 bulk_ticket = bulk_tickets_map.get(seat_assignment.bulk_ticket_id)
@@ -234,7 +238,11 @@ class OrderService:
                         "firebase_uid": order.firebase_uid,
                         "order_ref": order.order_reference
                     }
-                    user_ticket.qr_code_data = json.dumps(qr_data)
+                    qr_data_str = json.dumps(qr_data)
+                    user_ticket.qr_code_data = qr_data_str
+                    
+                    # Add QR code to the list for notification
+                    qr_codes.append(qr_data_str)
                     
                     session.add(user_ticket)
                     
@@ -284,6 +292,42 @@ class OrderService:
             session.rollback()  # Rollback all changes if any step failed
             raise HTTPException(status_code=500, detail=f"Failed to complete order due to an internal error: {str(e)}")
         
+        # 7. Send completed order notification with all QR codes to Kafka in a separate try-catch block
+        # This way, notification failures won't affect the order transaction which is already committed
+        if order.status == OrderStatus.COMPLETED:
+            try:
+                logger.info(f"Sending order completion notification for order {order_id}")
+                
+                # Use the qr_codes we already collected during ticket creation
+                # Send consolidated notification with all data
+                notification_data = {
+                    "order_id": order.id,
+                    "firebase_uid": order.firebase_uid,
+                    "total_amount": float(order.total_amount),
+                    "qr_codes": qr_codes,
+                    "notification_type": "order_completed"
+                }
+                
+                # Use the generic send_message function to send all data in one message
+                send_message(
+                    topic="ticket_notifications", 
+                    key=order.firebase_uid, 
+                    data=notification_data,
+                    headers={
+                        "service": b"ticket-order-service",
+                        "message_type": b"order_completed"
+                    }
+                )
+                
+                logger.info(f"Successfully sent notification for order {order_id} with {len(qr_codes)} tickets")
+            except Exception as kafka_error:
+                # The order succeeded, but notification failed.
+                # DO NOT raise an HTTPException here. The user's order is fine.
+                # This is an internal problem that we must log for monitoring or retry.
+                logger.error(f"ALERT: Order {order_id} committed, but Kafka notification failed. Error: {kafka_error}")
+                # The system needs a way to handle these missed notifications,
+                # but the user's request was successful.
+            
         # Refresh the object to reflect committed changes
         session.refresh(order)
         
