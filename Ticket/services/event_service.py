@@ -88,9 +88,17 @@ class EventService:
     
     @staticmethod
     def get_event_bulk_tickets(session: Session, event_id: int) -> List[BulkTicket]:
-        """Get all bulk tickets for an event"""
+        """Get all bulk tickets for an event - only uses BulkTicket table"""
         statement = select(BulkTicket).where(BulkTicket.event_id == event_id)
-        return session.exec(statement).all()
+        bulk_tickets = session.exec(statement).all()
+        
+        if not bulk_tickets:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No bulk tickets found for event_id {event_id}"
+            )
+        
+        return bulk_tickets
     
     @staticmethod
     def get_available_seats(session: Session, bulk_ticket_id: int) -> List[str]:
