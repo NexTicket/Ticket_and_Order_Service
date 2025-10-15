@@ -42,7 +42,6 @@ class Venue(VenueBase, table=True):
 
     # Relationships
     events: List["Event"] = Relationship(back_populates="venue")
-    bulk_tickets: List["BulkTicket"] = Relationship(back_populates="venue")
 
 class VenueCreate(VenueBase):
     pass
@@ -64,7 +63,6 @@ class Event(EventBase, table=True):
 
     # Relationships
     venue: Venue = Relationship(back_populates="events")
-    bulk_tickets: List["BulkTicket"] = Relationship(back_populates="event")
 
 class EventCreate(EventBase):
     pass
@@ -75,8 +73,8 @@ class EventRead(EventBase):
 
 # BulkTicket Model - Created by organizers
 class BulkTicketBase(SQLModel):
-    event_id: int = Field(foreign_key="event.id")
-    venue_id: int = Field(foreign_key="venue.id")
+    event_id: int  # From external API, no foreign key constraint
+    venue_id: int  # From external API, no foreign key constraint
     seat_type: SeatType
     price: float = Field(ge=0)
     total_seats: int = Field(ge=1)
@@ -89,8 +87,6 @@ class BulkTicket(BulkTicketBase, table=True):
     updated_at: Optional[datetime] = None
     
     # Relationships
-    event: Event = Relationship(back_populates="bulk_tickets")
-    venue: Venue = Relationship(back_populates="bulk_tickets")
     user_tickets: List["UserTicket"] = Relationship(back_populates="bulk_ticket")
 
 class BulkTicketCreate(BulkTicketBase):

@@ -15,19 +15,6 @@ class TicketService:
     @staticmethod
     def create_bulk_tickets(session: Session, bulk_ticket_data: BulkTicketCreate) -> BulkTicket:
         """Create bulk tickets for an event (organizer function)"""
-        # Verify event and venue exist
-        from Ticket.services.event_service import EventService
-        event = EventService.get_event(session, bulk_ticket_data.event_id)
-        if not event:
-            raise HTTPException(status_code=404, detail="Event not found")
-        
-        from Ticket.services.venue_service import VenueService
-        venue = VenueService.get_venue(session, bulk_ticket_data.venue_id)
-        if not venue:
-            raise HTTPException(status_code=404, detail="Venue not found")
-        
-        if event.venue_id != bulk_ticket_data.venue_id:
-            raise HTTPException(status_code=400, detail="Event venue mismatch")
         
         # Check if bulk ticket already exists
         existing = session.exec(
