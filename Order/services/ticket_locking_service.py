@@ -73,18 +73,18 @@ class TicketLockingService:
                 total_amount = bulk_ticket.price * len(request_data.seat_ids)
                 seat_assignments[str(bulk_ticket.id)] = request_data.seat_ids
         else:
-            # Otherwise, try to match each seat to a bulk ticket based on seat prefix
+            # Otherwise, try to match each seat to a bulk ticket based on seat section matching seat_prefix
             bulk_tickets = session.exec(
                 select(BulkTicket).where(BulkTicket.event_id == request_data.event_id)
             ).all()
             
-            for seat_id in request_data.seat_ids:
+            for seat in request_data.seat_ids:
                 matched = False
                 for bulk_ticket in bulk_tickets:
-                    if seat_id.startswith(bulk_ticket.seat_prefix):
+                    if seat.section == bulk_ticket.seat_prefix:
                         if str(bulk_ticket.id) not in seat_assignments:
                             seat_assignments[str(bulk_ticket.id)] = []
-                        seat_assignments[str(bulk_ticket.id)].append(seat_id)
+                        seat_assignments[str(bulk_ticket.id)].append(seat)
                         total_amount += bulk_ticket.price
                         matched = True
                         break
@@ -92,7 +92,7 @@ class TicketLockingService:
                 if not matched:
                     raise HTTPException(
                         status_code=400, 
-                        detail=f"Seat {seat_id} does not match any available ticket types"
+                        detail=f"Seat section '{seat.section}' does not match any available ticket types"
                     )
         
         # 6. First, lock seats in Redis (which could fail)
@@ -147,8 +147,18 @@ class TicketLockingService:
             
             db_order = UserOrder.model_validate(order_data_db)
             db_order.id = order_id  # Use the same order_id for Redis and database
+            
+            # Convert seat_assignments to a JSON-serializable format
+            serializable_seat_assignments = {}
+            for bulk_ticket_id, seats in seat_assignments.items():
+                # Convert SeatID objects to dicts for JSON serialization
+                serializable_seat_assignments[bulk_ticket_id] = [
+                    {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id} 
+                    for seat in seats
+                ]
+            
             db_order.notes = json.dumps({
-                "seat_assignments": seat_assignments,
+                "seat_assignments": serializable_seat_assignments,
                 "order_id": order_id
             })
             session.add(db_order)

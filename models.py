@@ -255,8 +255,8 @@ class TransactionsUpdate(SQLModel):
 # SeatOrder Model - Links orders with specific seats
 class SeatOrderBase(SQLModel):
     order_id: str = Field(foreign_key="userorder.id", index=True)
-    event_id: int = Field(foreign_key="event.id")
-    venue_id: int = Field(foreign_key="venue.id")
+    event_id: int  # From external API, no foreign key constraint
+    venue_id: int  # From external API, no foreign key constraint
     bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
     seat_ids: str  # JSON string containing list of seat IDs
 
