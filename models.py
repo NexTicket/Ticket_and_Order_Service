@@ -5,6 +5,38 @@ from enum import Enum
 import uuid
 import json
 
+# Seat ID Model - Complex seat structure
+class SeatID(SQLModel):
+    """Represents a seat with section, row, and column"""
+    section: str
+    row_id: int
+    col_id: int
+    
+    def to_string(self) -> str:
+        """Convert seat to unique string identifier for Redis keys"""
+        return f"{self.section}:R{self.row_id}:C{self.col_id}"
+    
+    @classmethod
+    def from_string(cls, seat_str: str) -> "SeatID":
+        """Parse seat string back to SeatID object"""
+        parts = seat_str.split(":")
+        if len(parts) != 3:
+            raise ValueError(f"Invalid seat string format: {seat_str}")
+        section = parts[0]
+        row_id = int(parts[1].replace("R", ""))
+        col_id = int(parts[2].replace("C", ""))
+        return cls(section=section, row_id=row_id, col_id=col_id)
+    
+    def to_json_str(self) -> str:
+        """Convert to JSON string for database storage"""
+        return json.dumps({"section": self.section, "row_id": self.row_id, "col_id": self.col_id})
+    
+    @classmethod
+    def from_json_str(cls, json_str: str) -> "SeatID":
+        """Parse JSON string from database"""
+        data = json.loads(json_str)
+        return cls(**data)
+
 class SeatType(str, Enum):
     VIP = "VIP"
     REGULAR = "REGULAR"
@@ -104,7 +136,7 @@ class BulkTicketUpdate(SQLModel):
 class RedisOrderItem(SQLModel):
     """Individual item in Redis order with bulk ticket info"""
     bulk_ticket_id: int
-    seat_ids: List[str]
+    seat_ids: List[SeatID]  # Changed from List[str] to List[SeatID]
     quantity: int
     price_per_seat: float
 
@@ -162,7 +194,7 @@ class UserTicketBase(SQLModel):
     order_id: str = Field(foreign_key="userorder.id")
     bulk_ticket_id: int = Field(foreign_key="bulkticket.id")
     firebase_uid: str = Field(index=True)  # Firebase UID instead of user_id
-    seat_id: str = Field(index=True)  # Unique seat identifier like "A1", "B25", "VIP001"
+    seat_id: str = Field(index=False)  # JSON string storing seat object {"section": "...", "row_id": ..., "col_id": ...}
     price_paid: float = Field(ge=0)
     status: TicketStatus = TicketStatus.SOLD
 
@@ -174,6 +206,14 @@ class UserTicket(UserTicketBase, table=True):
     # Relationships
     order: UserOrder = Relationship(back_populates="user_tickets")
     bulk_ticket: BulkTicket = Relationship(back_populates="user_tickets")
+    
+    def get_seat_object(self) -> SeatID:
+        """Parse seat_id JSON string to SeatID object"""
+        return SeatID.from_json_str(self.seat_id)
+    
+    def set_seat_object(self, seat: SeatID):
+        """Set seat_id from SeatID object"""
+        self.seat_id = seat.to_json_str()
 
 class UserTicketCreate(UserTicketBase):
     pass
@@ -234,7 +274,7 @@ class SeatOrderRead(SeatOrderBase):
 # Ticket Locking Models (Redis-based temporary order)
 
 class LockSeatsRequest(SQLModel):
-    seat_ids: List[str]
+    seat_ids: List[SeatID]  # Changed from List[str] to List[SeatID]
     event_id: int
     bulk_ticket_id: Optional[int] = None  # Optional for additional validation
 
@@ -242,7 +282,7 @@ class LockSeatsResponse(SQLModel):
     message: str
     order_id: str
     user_id: str
-    seat_ids: List[str]
+    seat_ids: List[SeatID]  # Changed from List[str] to List[SeatID]
     event_id: int
     expires_in_seconds: int
     expires_at: datetime
@@ -251,16 +291,16 @@ class LockSeatsResponse(SQLModel):
 
 class UnlockSeatsRequest(SQLModel):
     order_id: Optional[str] = None  # If not provided, unlock all user's locked seats
-    seat_ids: Optional[List[str]] = None  # If provided, unlock only these seats
+    seat_ids: Optional[List[SeatID]] = None  # Changed from List[str] to List[SeatID]
 
 class UnlockSeatsResponse(SQLModel):
     message: str
-    unlocked_seat_ids: List[str]
+    unlocked_seat_ids: List[SeatID]  # Changed from List[str] to List[SeatID]
 
 class GetLockedSeatsResponse(SQLModel):
     order_id: str
     user_id: str
-    seat_ids: List[str]
+    seat_ids: List[SeatID]  # Changed from List[str] to List[SeatID]
     event_id: int
     status: str
     expires_at: datetime
@@ -269,13 +309,13 @@ class GetLockedSeatsResponse(SQLModel):
 
 class SeatAvailabilityRequest(SQLModel):
     event_id: int
-    seat_ids: List[str]
+    seat_ids: List[SeatID]  # Changed from List[str] to List[SeatID]
 
 class SeatAvailabilityResponse(SQLModel):
     event_id: int
-    available_seats: List[str]
+    available_seats: List[SeatID]  # Changed from List[str] to List[SeatID]
     locked_seats: List[dict]  # List of {seat_id, locked_by_user_id, expires_at}
-    unavailable_seats: List[str]  # Already sold/reserved in main DB
+    unavailable_seats: List[SeatID]  # Changed from List[str] to List[SeatID]
 
 class ExtendLockRequest(SQLModel):
     order_id: str

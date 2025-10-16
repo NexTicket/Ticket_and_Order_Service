@@ -9,13 +9,14 @@ from models import (
     UserTicket, Transactions, TransactionsCreate,
     BulkTicket, OrderStatus, TransactionStatus,
     RedisOrderItem, OrderSummaryResponse,
-    SeatOrder, SeatOrderCreate
+    SeatOrder, SeatOrderCreate, SeatID
 )
 from Ticket.services.ticket_service import TicketService
 from Order.services.ticket_locking_service import TicketLockingService
 from Order.services.transaction_service import TransactionService
 from Payment.services.stripe_service import StripeService
 from Database.redis_client import redis_conn
+from utils.seat_utils import json_str_to_seat_list
 
 class OrderService:
     
@@ -28,7 +29,7 @@ class OrderService:
             return None
         
         # Parse order data
-        seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+        seat_ids = json_str_to_seat_list(order_data.get('seat_ids', '[]'))  # Parse to SeatID list
         event_id = int(order_data.get('event_id'))
         expires_at = datetime.fromisoformat(order_data['expires_at'])
         remaining_seconds = max(0, int((expires_at - datetime.now(timezone.utc)).total_seconds()))
@@ -50,7 +51,7 @@ class OrderService:
         
         items = [RedisOrderItem(
             bulk_ticket_id=bulk_ticket_info.get('bulk_ticket_id', 0),
-            seat_ids=seat_ids,
+            seat_ids=seat_ids,  # Already SeatID list
             quantity=len(seat_ids),
             price_per_seat=price_per_seat
         )]
@@ -74,7 +75,7 @@ class OrderService:
             raise HTTPException(status_code=400, detail="No temporary order found or order expired")
         
         # Parse order data
-        seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+        seat_ids = json_str_to_seat_list(order_data.get('seat_ids', '[]'))  # Parse to SeatID list
         event_id = int(order_data.get('event_id'))
         order_id = order_data.get('order_id')
         
@@ -202,9 +203,9 @@ class OrderService:
                     raise ValueError(f"Configuration error: BulkTicket not found.")  # Internal error
                 
                 try:
-                    seat_ids = json.loads(seat_assignment.seat_ids)
-                except json.JSONDecodeError:
-                    logger.error(f"Invalid seat_ids JSON for SeatOrder {seat_assignment.id}.")
+                    seat_ids = json_str_to_seat_list(seat_assignment.seat_ids)  # Parse to SeatID list
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.error(f"Invalid seat_ids JSON for SeatOrder {seat_assignment.id}: {e}.")
                     raise ValueError("Invalid seat data.")
                 
                 # Check if there are enough available seats before processing
@@ -214,23 +215,23 @@ class OrderService:
                     raise HTTPException(status_code=409, detail="Not enough available seats to complete the order.")
                 
                 # Process each seat individually
-                for seat_id in seat_ids:
+                for seat in seat_ids:
                     # Create one UserTicket per seat
                     user_ticket = UserTicket(
                         order_id=order.id,
                         bulk_ticket_id=bulk_ticket.id,
                         firebase_uid=order.firebase_uid,
-                        seat_id=seat_id,
+                        seat_id=seat.to_json_str(),  # Store as JSON string
                         price_paid=bulk_ticket.price,
                         status="sold"
                     )
                     
                     # Generate unique QR code data for this specific ticket
                     qr_data = {
-                        "ticket_id": f"ticket_{order.id}_{seat_id}",
+                        "ticket_id": f"ticket_{order.id}_{seat.to_string()}",
                         "event_id": bulk_ticket.event_id,
                         "venue_id": bulk_ticket.venue_id,
-                        "seat_id": seat_id,
+                        "seat": {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id},
                         "firebase_uid": order.firebase_uid,
                         "order_ref": order.order_reference
                     }
