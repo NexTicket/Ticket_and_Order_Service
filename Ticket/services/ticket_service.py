@@ -6,10 +6,11 @@ from models import (
     UserTicket, UserTicketCreate, 
     RedisOrderItem,
     UserOrder, Event, Venue,
-    SeatType, TicketStatus
+    SeatType, TicketStatus, SeatID
 )
 import json
 import hashlib
+from utils.seat_utils import json_str_to_seat_list
 
 class TicketService:
     @staticmethod
@@ -66,11 +67,11 @@ class TicketService:
         return available_seats
     
     @staticmethod
-    def generate_qr_code_data(firebase_uid: str, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat_id: str) -> str:
+    def generate_qr_code_data(firebase_uid: str, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat: SeatID) -> str:
         """Generate QR code data with comprehensive ticket information"""
         qr_data = {
-            "ticket_id": f"{seat_id}-{bulk_ticket.id}",
-            "seat_id": seat_id,
+            "ticket_id": f"{seat.to_string()}-{bulk_ticket.id}",
+            "seat": {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id},
             "firebase_uid": firebase_uid,
             "event_name": event.name,
             "event_date": event.event_date.isoformat(),
@@ -105,7 +106,7 @@ class TicketService:
             venue = session.get(Venue, bulk_ticket.venue_id)
             
             # Use the specific seat IDs from Redis cart (they were already locked)
-            assigned_seats = cart_item.seat_ids
+            assigned_seats = cart_item.seat_ids  # Already SeatID objects
             
             if len(assigned_seats) != cart_item.quantity:
                 raise HTTPException(
@@ -114,16 +115,16 @@ class TicketService:
                 )
             
             # Create user tickets
-            for seat_id in assigned_seats:
+            for seat in assigned_seats:
                 qr_code_data = TicketService.generate_qr_code_data(
-                    order.firebase_uid, bulk_ticket, event, venue, seat_id
+                    order.firebase_uid, bulk_ticket, event, venue, seat
                 )
                 
                 user_ticket_data = UserTicketCreate(
                     order_id=order.id,
                     bulk_ticket_id=cart_item.bulk_ticket_id,
                     firebase_uid=order.firebase_uid,
-                    seat_id=seat_id,
+                    seat_id=seat.to_json_str(),  # Store as JSON string
                     price_paid=cart_item.price_per_seat,
                     status=TicketStatus.SOLD
                 )
@@ -157,11 +158,18 @@ class TicketService:
             event = session.get(Event, bulk_ticket.event_id)
             venue = session.get(Venue, bulk_ticket.venue_id)
             
+            # Parse seat from JSON
+            try:
+                seat = ticket.get_seat_object()
+                seat_dict = {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id}
+            except:
+                seat_dict = ticket.seat_id  # Fallback to raw value if parsing fails
+            
             ticket_details = {
                 "id": ticket.id,
                 "order_id": ticket.order_id,
                 "qr_code_data": ticket.qr_code_data,
-                "seat_id": ticket.seat_id,
+                "seat": seat_dict,  # Return as structured object
                 "price_paid": ticket.price_paid,
                 "status": ticket.status,
                 "created_at": ticket.created_at,

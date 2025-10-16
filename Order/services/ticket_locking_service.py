@@ -14,10 +14,15 @@ from models import (
     BulkTicket, UserTicket, UserOrder, UserOrderCreate,
     LockSeatsRequest, LockSeatsResponse, UnlockSeatsRequest, UnlockSeatsResponse,
     GetLockedSeatsResponse, SeatAvailabilityResponse, ExtendLockResponse, OrderStatus,
-    SeatOrder, SeatOrderCreate, TransactionStatus
+    SeatOrder, SeatOrderCreate, TransactionStatus, SeatID
 )
 from Payment.services.stripe_service import StripeService
 from Order.services.transaction_service import TransactionService
+from utils.seat_utils import (
+    seat_list_to_json_str, json_str_to_seat_list, 
+    seat_to_redis_key, seats_equal, find_seat_in_list,
+    remove_seats_from_list, seats_in_list
+)
 
 class TicketLockingService:
     
@@ -68,18 +73,18 @@ class TicketLockingService:
                 total_amount = bulk_ticket.price * len(request_data.seat_ids)
                 seat_assignments[str(bulk_ticket.id)] = request_data.seat_ids
         else:
-            # Otherwise, try to match each seat to a bulk ticket based on seat prefix
+            # Otherwise, try to match each seat to a bulk ticket based on seat section matching seat_prefix
             bulk_tickets = session.exec(
                 select(BulkTicket).where(BulkTicket.event_id == request_data.event_id)
             ).all()
             
-            for seat_id in request_data.seat_ids:
+            for seat in request_data.seat_ids:
                 matched = False
                 for bulk_ticket in bulk_tickets:
-                    if seat_id.startswith(bulk_ticket.seat_prefix):
+                    if seat.section == bulk_ticket.seat_prefix:
                         if str(bulk_ticket.id) not in seat_assignments:
                             seat_assignments[str(bulk_ticket.id)] = []
-                        seat_assignments[str(bulk_ticket.id)].append(seat_id)
+                        seat_assignments[str(bulk_ticket.id)].append(seat)
                         total_amount += bulk_ticket.price
                         matched = True
                         break
@@ -87,7 +92,7 @@ class TicketLockingService:
                 if not matched:
                     raise HTTPException(
                         status_code=400, 
-                        detail=f"Seat {seat_id} does not match any available ticket types"
+                        detail=f"Seat section '{seat.section}' does not match any available ticket types"
                     )
         
         # 6. First, lock seats in Redis (which could fail)
@@ -96,7 +101,7 @@ class TicketLockingService:
             "order_id": order_id,
             "user_id": user_id,
             "event_id": request_data.event_id,
-            "seat_ids": json.dumps(request_data.seat_ids),
+            "seat_ids": seat_list_to_json_str(request_data.seat_ids),  # Convert SeatID list to JSON
             "bulk_ticket_info": json.dumps(bulk_ticket_info),
             "status": "locked",
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -111,13 +116,14 @@ class TicketLockingService:
             pipe.expire(redis_key, ORDER_EXPIRATION_SECONDS)
             
             # Store individual seat locks for conflict checking
-            for seat_id in request_data.seat_ids:
-                seat_lock_key = f"seat_lock:{request_data.event_id}:{seat_id}"
+            for seat in request_data.seat_ids:
+                seat_lock_key = seat_to_redis_key(request_data.event_id, seat)  # Use utility function
                 seat_lock_data = {
                     "user_id": user_id,
                     "order_id": order_id,
                     "locked_at": datetime.now(timezone.utc).isoformat(),
-                    "expires_at": expires_at.isoformat()
+                    "expires_at": expires_at.isoformat(),
+                    "seat_data": seat.to_json_str()  # Store seat details
                 }
                 pipe.hset(seat_lock_key, mapping=seat_lock_data)
                 pipe.expire(seat_lock_key, ORDER_EXPIRATION_SECONDS)
@@ -141,8 +147,18 @@ class TicketLockingService:
             
             db_order = UserOrder.model_validate(order_data_db)
             db_order.id = order_id  # Use the same order_id for Redis and database
+            
+            # Convert seat_assignments to a JSON-serializable format
+            serializable_seat_assignments = {}
+            for bulk_ticket_id, seats in seat_assignments.items():
+                # Convert SeatID objects to dicts for JSON serialization
+                serializable_seat_assignments[bulk_ticket_id] = [
+                    {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id} 
+                    for seat in seats
+                ]
+            
             db_order.notes = json.dumps({
-                "seat_assignments": seat_assignments,
+                "seat_assignments": serializable_seat_assignments,
                 "order_id": order_id
             })
             session.add(db_order)
@@ -170,7 +186,7 @@ class TicketLockingService:
                         event_id=request_data.event_id,
                         venue_id=bulk_ticket.venue_id,
                         bulk_ticket_id=bulk_ticket.id,
-                        seat_ids=json.dumps(seats)
+                        seat_ids=seat_list_to_json_str(seats)  # Convert SeatID list to JSON
                     )
                         session.add(seat_assignment)
                 session.commit()
@@ -222,8 +238,8 @@ class TicketLockingService:
                 # Clean up Redis locks since database update failed
                 pipe = redis_conn.pipeline()
                 pipe.delete(redis_key)
-                for seat_id in request_data.seat_ids:
-                    pipe.delete(f"seat_lock:{request_data.event_id}:{seat_id}")
+                for seat in request_data.seat_ids:
+                    pipe.delete(seat_to_redis_key(request_data.event_id, seat))  # Use utility function
                 pipe.execute()
             except:
                 pass  
@@ -274,13 +290,13 @@ class TicketLockingService:
                         detail="Order not found or doesn't belong to user"
                     )
                 
-                seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+                seat_ids = json_str_to_seat_list(order_data.get('seat_ids', '[]'))  # Parse to SeatID list
                 event_id = order_data.get('event_id')
                 order_id = order_data.get('order_id')
                 
                 # If specific seats provided, unlock only those
                 if request_data.seat_ids:
-                    seats_to_unlock = [sid for sid in request_data.seat_ids if sid in seat_ids]
+                    seats_to_unlock = seats_in_list(request_data.seat_ids, seat_ids)  # Use utility
                 else:
                     seats_to_unlock = seat_ids
                 
@@ -288,8 +304,8 @@ class TicketLockingService:
                 
                 # Update order data if partially unlocking
                 if request_data.seat_ids and len(seats_to_unlock) < len(seat_ids):
-                    remaining_seats = [sid for sid in seat_ids if sid not in seats_to_unlock]
-                    order_data['seat_ids'] = json.dumps(remaining_seats)
+                    remaining_seats = remove_seats_from_list(seats_to_unlock, seat_ids)  # Use utility
+                    order_data['seat_ids'] = seat_list_to_json_str(remaining_seats)  # Convert back to JSON
                     redis_conn.hset(f"order:{user_id}", mapping=order_data)
                 else:
                     # Remove entire order if all seats unlocked
@@ -371,7 +387,7 @@ class TicketLockingService:
         return GetLockedSeatsResponse(
             order_id=order_data['order_id'],
             user_id=order_data['user_id'],
-            seat_ids=json.loads(order_data['seat_ids']),
+            seat_ids=json_str_to_seat_list(order_data['seat_ids']),  # Parse to SeatID list
             event_id=int(order_data['event_id']),
             status=order_data['status'],
             expires_at=expires_at,
@@ -380,44 +396,54 @@ class TicketLockingService:
         )
     
     @staticmethod
-    def check_seat_availability(session: Session, event_id: int, seat_ids: List[str]) -> SeatAvailabilityResponse:
+    def check_seat_availability(session: Session, event_id: int, seat_ids: List[SeatID]) -> SeatAvailabilityResponse:
         """
         Check availability status of specific seats for an event.
         """
-        # Check what's sold/reserved in main database
-        stmt = select(UserTicket).where(
-            UserTicket.seat_id.in_(seat_ids)
-        ).join(BulkTicket).where(
-            BulkTicket.event_id == event_id
-        )
-        sold_tickets = session.exec(stmt).all()
-        unavailable_seats = [ticket.seat_id for ticket in sold_tickets]
+        # Check what's sold/reserved in main database - need to check each seat individually
+        unavailable_seats = []
+        for seat in seat_ids:
+            # Query for tickets matching this seat's JSON representation
+            stmt = select(UserTicket).join(BulkTicket).where(
+                BulkTicket.event_id == event_id
+            )
+            all_tickets = session.exec(stmt).all()
+            
+            # Check each ticket to see if its seat matches
+            for ticket in all_tickets:
+                try:
+                    ticket_seat = ticket.get_seat_object()
+                    if seats_equal(ticket_seat, seat):
+                        unavailable_seats.append(seat)
+                        break
+                except:
+                    pass
         
         # Check what's currently locked in Redis
         locked_seats = []
         available_seats = []
         
-        for seat_id in seat_ids:
-            if seat_id in unavailable_seats:
+        for seat in seat_ids:
+            if find_seat_in_list(seat, unavailable_seats) != -1:
                 continue
                 
-            seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+            seat_lock_key = seat_to_redis_key(event_id, seat)  # Use utility function
             lock_data = redis_conn.hgetall(seat_lock_key)
             
             if lock_data:
                 expires_at = datetime.fromisoformat(lock_data['expires_at'])
                 if expires_at > datetime.now(timezone.utc):
                     locked_seats.append({
-                        "seat_id": seat_id,
+                        "seat_id": seat,  # Will be serialized as dict in response
                         "locked_by_user_id": lock_data['user_id'],
                         "expires_at": expires_at
                     })
                 else:
                     # Clean up expired lock
                     redis_conn.delete(seat_lock_key)
-                    available_seats.append(seat_id)
+                    available_seats.append(seat)
             else:
-                available_seats.append(seat_id)
+                available_seats.append(seat)
         
         return SeatAvailabilityResponse(
             event_id=event_id,
@@ -453,11 +479,11 @@ class TicketLockingService:
             pipe.expire(f"order:{user_id}", int((new_expires - datetime.now(timezone.utc)).total_seconds()))
             
             # Update individual seat locks
-            seat_ids = json.loads(order_data['seat_ids'])
+            seat_ids = json_str_to_seat_list(order_data['seat_ids'])  # Parse to SeatID list
             event_id = order_data['event_id']
             
-            for seat_id in seat_ids:
-                seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+            for seat in seat_ids:
+                seat_lock_key = seat_to_redis_key(event_id, seat)  # Use utility function
                 lock_data = redis_conn.hgetall(seat_lock_key)
                 if lock_data:
                     lock_data['expires_at'] = new_expires.isoformat()
@@ -484,41 +510,52 @@ class TicketLockingService:
     # --- Helper Methods ---
     
     @staticmethod
-    def _validate_seat_availability(session: Session, event_id: int, seat_ids: List[str]):
+    def _validate_seat_availability(session: Session, event_id: int, seat_ids: List[SeatID]):
         """
         Validate that the event exists and seats are not already sold.
         """
         # Check if seats are already sold in the main database
-        stmt = select(UserTicket).where(
-            UserTicket.seat_id.in_(seat_ids)
-        ).join(BulkTicket).where(
+        sold_seat_ids = []
+        
+        # Query all tickets for this event
+        stmt = select(UserTicket).join(BulkTicket).where(
             BulkTicket.event_id == event_id
         )
-        sold_tickets = session.exec(stmt).all()
+        all_tickets = session.exec(stmt).all()
         
-        if sold_tickets:
-            sold_seat_ids = [ticket.seat_id for ticket in sold_tickets]
+        # Check each requested seat against sold tickets
+        for seat in seat_ids:
+            for ticket in all_tickets:
+                try:
+                    ticket_seat = ticket.get_seat_object()
+                    if seats_equal(ticket_seat, seat):
+                        sold_seat_ids.append(seat)
+                        break
+                except:
+                    pass
+        
+        if sold_seat_ids:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Seats already sold: {sold_seat_ids}"
+                detail=f"Seats already sold: {[s.to_string() for s in sold_seat_ids]}"
             )
     
     @staticmethod
-    def _check_seat_conflicts(event_id: int, seat_ids: List[str], user_id: str) -> List[str]:
+    def _check_seat_conflicts(event_id: int, seat_ids: List[SeatID], user_id: str) -> List[SeatID]:
         """
         Check if any seats are already locked by other users.
         """
         conflicted_seats = []
         
-        for seat_id in seat_ids:
-            seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+        for seat in seat_ids:
+            seat_lock_key = seat_to_redis_key(event_id, seat)  # Use utility function
             lock_data = redis_conn.hgetall(seat_lock_key)
             
             if lock_data and lock_data.get('user_id') != user_id:
                 # Check if lock is still valid
                 expires_at = datetime.fromisoformat(lock_data['expires_at'])
                 if expires_at > datetime.now(timezone.utc):
-                    conflicted_seats.append(seat_id)
+                    conflicted_seats.append(seat)
                 else:
                     # Clean up expired lock
                     redis_conn.delete(seat_lock_key)
@@ -526,7 +563,7 @@ class TicketLockingService:
         return conflicted_seats
     
     @staticmethod
-    def _cleanup_user_locks(user_id: str, session: Optional[Session] = None) -> List[str]:
+    def _cleanup_user_locks(user_id: str, session: Optional[Session] = None) -> List[SeatID]:
         """
         Clean up all existing locks for a user.
         """
@@ -536,7 +573,7 @@ class TicketLockingService:
         order_data = TicketLockingService._get_user_order_data(user_id)
         
         if order_data:
-            seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+            seat_ids = json_str_to_seat_list(order_data.get('seat_ids', '[]'))  # Parse to SeatID list
             event_id = order_data.get('event_id')
             order_id = order_data.get('order_id')
             
@@ -564,20 +601,20 @@ class TicketLockingService:
         return unlocked_seats
     
     @staticmethod
-    def _unlock_specific_seats(event_id: int, seat_ids: List[str], user_id: str) -> List[str]:
+    def _unlock_specific_seats(event_id: int, seat_ids: List[SeatID], user_id: str) -> List[SeatID]:
         """
         Unlock specific seats for an event.
         """
         unlocked_seats = []
         
-        for seat_id in seat_ids:
-            seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+        for seat in seat_ids:
+            seat_lock_key = seat_to_redis_key(event_id, seat)  # Use utility function
             lock_data = redis_conn.hgetall(seat_lock_key)
             
             # Only unlock if it belongs to this user
             if lock_data and lock_data.get('user_id') == user_id:
                 redis_conn.delete(seat_lock_key)
-                unlocked_seats.append(seat_id)
+                unlocked_seats.append(seat)
         
         return unlocked_seats
     
@@ -608,15 +645,15 @@ class TicketLockingService:
             if order_data and order_data.get('order_id') == order_id:
                 user_id = order_data.get('user_id')
                 event_id = order_data.get('event_id')
-                seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+                seat_ids = json_str_to_seat_list(order_data.get('seat_ids', '[]'))  # Parse to SeatID list
                 
                 # Delete user's order
                 redis_conn.delete(key)
                 
                 # Also delete individual seat locks
                 if event_id and seat_ids:
-                    for seat_id in seat_ids:
-                        seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+                    for seat in seat_ids:
+                        seat_lock_key = seat_to_redis_key(event_id, seat)  # Use utility function
                         redis_conn.delete(seat_lock_key)
                         
                 # No need to continue scanning once we found the order
@@ -628,15 +665,15 @@ class TicketLockingService:
             if order_data and order_data.get('order_id') == order_id:
                 user_id = order_data.get('user_id')
                 event_id = order_data.get('event_id')
-                seat_ids = json.loads(order_data.get('seat_ids', '[]'))
+                seat_ids = json_str_to_seat_list(order_data.get('seat_ids', '[]'))  # Parse to SeatID list
                 
                 # Delete user's cart
                 redis_conn.delete(key)
                 
                 # Also delete individual seat locks
                 if event_id and seat_ids:
-                    for seat_id in seat_ids:
-                        seat_lock_key = f"seat_lock:{event_id}:{seat_id}"
+                    for seat in seat_ids:
+                        seat_lock_key = seat_to_redis_key(event_id, seat)  # Use utility function
                         redis_conn.delete(seat_lock_key)
                 
                 break
