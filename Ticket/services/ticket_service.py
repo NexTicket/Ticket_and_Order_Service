@@ -210,3 +210,29 @@ class TicketService:
             "venue": venue,
             "bulk_ticket": bulk_ticket
         }
+    
+    @staticmethod
+    def get_bulk_ticket_prices_by_venue_event(session: Session, venue_id: int, event_id: int) -> List[dict]:
+        """Get all bulk ticket prices for a specific venue and event, grouped by section"""
+        statement = select(BulkTicket).where(
+            BulkTicket.venue_id == venue_id,
+            BulkTicket.event_id == event_id
+        )
+        bulk_tickets = session.exec(statement).all()
+        
+        if not bulk_tickets:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No bulk tickets found for venue_id={venue_id} and event_id={event_id}"
+            )
+        
+        # Create list of dictionaries with section as key, price as value, and bulk_ticket_id
+        result = []
+        for bulk_ticket in bulk_tickets:
+            result.append({
+                "section": bulk_ticket.seat_prefix,
+                "price": bulk_ticket.price,
+                "bulk_ticket_id": bulk_ticket.id
+            })
+        
+        return result

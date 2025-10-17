@@ -6,7 +6,8 @@ from firebase_auth import get_current_user_from_token
 from models import (
     UserTicket, UserTicketRead, 
     BulkTicket, BulkTicketRead,
-    TicketWithDetails
+    TicketWithDetails,
+    BulkTicketPriceRequest
 )
 from Ticket.services.ticket_service import TicketService
 
@@ -66,5 +67,29 @@ def get_bulk_ticket_available_seats(bulk_ticket_id: int, session: Session = Depe
             "available_seats": available_seats,
             "count": len(available_seats)
         }
+    except HTTPException as e:
+        raise e
+
+@router.post("/bulk-ticket/prices")
+def get_bulk_ticket_prices(
+    request_data: BulkTicketPriceRequest,
+    session: Session = Depends(get_session)
+):
+    """Get all bulk ticket prices for a specific venue and event
+    
+    Returns a list of dictionaries with section, price, and bulk_ticket_id.
+    Example: [
+        {"section": "VIP", "price": 5000, "bulk_ticket_id": 1},
+        {"section": "General", "price": 3000, "bulk_ticket_id": 2},
+        {"section": "Balcony", "price": 2000, "bulk_ticket_id": 3}
+    ]
+    """
+    try:
+        prices = TicketService.get_bulk_ticket_prices_by_venue_event(
+            session, 
+            request_data.venue_id, 
+            request_data.event_id
+        )
+        return prices
     except HTTPException as e:
         raise e

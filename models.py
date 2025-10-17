@@ -132,6 +132,10 @@ class BulkTicketUpdate(SQLModel):
     price: Optional[float] = None
     available_seats: Optional[int] = None
 
+class BulkTicketPriceRequest(SQLModel):
+    venue_id: int
+    event_id: int
+
 # Redis Order Models (for temporary order data structure)
 class RedisOrderItem(SQLModel):
     """Individual item in Redis order with bulk ticket info"""
