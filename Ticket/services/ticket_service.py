@@ -6,28 +6,16 @@ from models import (
     UserTicket, UserTicketCreate, 
     RedisOrderItem,
     UserOrder, Event, Venue,
-    SeatType, TicketStatus
+    SeatType, TicketStatus, SeatID
 )
 import json
 import hashlib
+from utils.seat_utils import json_str_to_seat_list
 
 class TicketService:
     @staticmethod
     def create_bulk_tickets(session: Session, bulk_ticket_data: BulkTicketCreate) -> BulkTicket:
         """Create bulk tickets for an event (organizer function)"""
-        # Verify event and venue exist
-        from Ticket.services.event_service import EventService
-        event = EventService.get_event(session, bulk_ticket_data.event_id)
-        if not event:
-            raise HTTPException(status_code=404, detail="Event not found")
-        
-        from Ticket.services.venue_service import VenueService
-        venue = VenueService.get_venue(session, bulk_ticket_data.venue_id)
-        if not venue:
-            raise HTTPException(status_code=404, detail="Venue not found")
-        
-        if event.venue_id != bulk_ticket_data.venue_id:
-            raise HTTPException(status_code=400, detail="Event venue mismatch")
         
         # Check if bulk ticket already exists
         existing = session.exec(
@@ -79,11 +67,11 @@ class TicketService:
         return available_seats
     
     @staticmethod
-    def generate_qr_code_data(firebase_uid: str, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat_id: str) -> str:
+    def generate_qr_code_data(firebase_uid: str, bulk_ticket: BulkTicket, event: Event, venue: Venue, seat: SeatID) -> str:
         """Generate QR code data with comprehensive ticket information"""
         qr_data = {
-            "ticket_id": f"{seat_id}-{bulk_ticket.id}",
-            "seat_id": seat_id,
+            "ticket_id": f"{seat.to_string()}-{bulk_ticket.id}",
+            "seat": {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id},
             "firebase_uid": firebase_uid,
             "event_name": event.name,
             "event_date": event.event_date.isoformat(),
@@ -118,7 +106,7 @@ class TicketService:
             venue = session.get(Venue, bulk_ticket.venue_id)
             
             # Use the specific seat IDs from Redis cart (they were already locked)
-            assigned_seats = cart_item.seat_ids
+            assigned_seats = cart_item.seat_ids  # Already SeatID objects
             
             if len(assigned_seats) != cart_item.quantity:
                 raise HTTPException(
@@ -127,16 +115,16 @@ class TicketService:
                 )
             
             # Create user tickets
-            for seat_id in assigned_seats:
+            for seat in assigned_seats:
                 qr_code_data = TicketService.generate_qr_code_data(
-                    order.firebase_uid, bulk_ticket, event, venue, seat_id
+                    order.firebase_uid, bulk_ticket, event, venue, seat
                 )
                 
                 user_ticket_data = UserTicketCreate(
                     order_id=order.id,
                     bulk_ticket_id=cart_item.bulk_ticket_id,
                     firebase_uid=order.firebase_uid,
-                    seat_id=seat_id,
+                    seat_id=seat.to_json_str(),  # Store as JSON string
                     price_paid=cart_item.price_per_seat,
                     status=TicketStatus.SOLD
                 )
@@ -159,17 +147,58 @@ class TicketService:
         return user_tickets
     
     @staticmethod
-    def get_user_tickets(session: Session, firebase_uid: str) -> List[UserTicket]:
-        """Get all tickets owned by a user"""
+    def get_user_tickets(session: Session, firebase_uid: str) -> List[dict]:
+        """Get all tickets owned by a user with order_id, qr_code_data, and bulk ticket details"""
         statement = select(UserTicket).where(UserTicket.firebase_uid == firebase_uid)
-        return session.exec(statement).all()
+        user_tickets = session.exec(statement).all()
+        
+        result = []
+        for ticket in user_tickets:
+            bulk_ticket = session.get(BulkTicket, ticket.bulk_ticket_id)
+            event = session.get(Event, bulk_ticket.event_id)
+            venue = session.get(Venue, bulk_ticket.venue_id)
+            
+            # Parse seat from JSON
+            try:
+                seat = ticket.get_seat_object()
+                seat_dict = {"section": seat.section, "row_id": seat.row_id, "col_id": seat.col_id}
+            except:
+                seat_dict = ticket.seat_id  # Fallback to raw value if parsing fails
+            
+            ticket_details = {
+                "id": ticket.id,
+                "order_id": ticket.order_id,
+                "qr_code_data": ticket.qr_code_data,
+                "seat": seat_dict,  # Return as structured object
+                "price_paid": ticket.price_paid,
+                "status": ticket.status,
+                "created_at": ticket.created_at,
+                "bulk_ticket": {
+                    "id": bulk_ticket.id,
+                    "event_id": bulk_ticket.event_id,
+                    "venue_id": bulk_ticket.venue_id,
+                    "seat_type": bulk_ticket.seat_type,
+                    "price": bulk_ticket.price,
+                    "seat_prefix": bulk_ticket.seat_prefix
+                }
+            }
+            result.append(ticket_details)
+            
+        return result
     
     @staticmethod
-    def get_ticket_with_details(session: Session, ticket_id: int) -> dict:
+    def get_ticket_with_details(session: Session, ticket_id: int, firebase_uid: str) -> dict:
         """Get ticket with full event and venue details"""
         ticket = session.get(UserTicket, ticket_id)
         if not ticket:
             raise HTTPException(status_code=404, detail="Ticket not found")
+        
+        # Security check: Ensure the user owns this ticket
+        if ticket.firebase_uid != firebase_uid:
+            raise HTTPException(
+                status_code=403, 
+                detail="You don't have permission to access this ticket"
+            )
         
         bulk_ticket = session.get(BulkTicket, ticket.bulk_ticket_id)
         event = session.get(Event, bulk_ticket.event_id)
@@ -181,3 +210,29 @@ class TicketService:
             "venue": venue,
             "bulk_ticket": bulk_ticket
         }
+    
+    @staticmethod
+    def get_bulk_ticket_prices_by_venue_event(session: Session, venue_id: int, event_id: int) -> List[dict]:
+        """Get all bulk ticket prices for a specific venue and event, grouped by section"""
+        statement = select(BulkTicket).where(
+            BulkTicket.venue_id == venue_id,
+            BulkTicket.event_id == event_id
+        )
+        bulk_tickets = session.exec(statement).all()
+        
+        if not bulk_tickets:
+            raise HTTPException(
+                status_code=404, 
+                detail=f"No bulk tickets found for venue_id={venue_id} and event_id={event_id}"
+            )
+        
+        # Create list of dictionaries with section as key, price as value, and bulk_ticket_id
+        result = []
+        for bulk_ticket in bulk_tickets:
+            result.append({
+                "section": bulk_ticket.seat_prefix,
+                "price": bulk_ticket.price,
+                "bulk_ticket_id": bulk_ticket.id
+            })
+        
+        return result
