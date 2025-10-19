@@ -16,6 +16,7 @@ from Order.services.ticket_locking_service import TicketLockingService
 from Order.services.transaction_service import TransactionService
 from Payment.services.stripe_service import StripeService
 from Database.redis_client import redis_conn
+from utils.seat_utils import json_str_to_seat_list
 
 class OrderService:
     
