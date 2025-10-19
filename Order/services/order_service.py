@@ -11,6 +11,7 @@ from models import (
     RedisOrderItem, OrderSummaryResponse,
     SeatOrder, SeatOrderCreate, SeatID
 )
+from kafka.kafka_producer import send_message
 from Ticket.services.ticket_service import TicketService
 from Order.services.ticket_locking_service import TicketLockingService
 from Order.services.transaction_service import TransactionService
