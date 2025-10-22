@@ -177,7 +177,7 @@ def send_message(topic: str, key: str, data: Dict[str, Any], headers: Optional[D
     try:
         # Add metadata
         data['timestamp'] = int(time.time())
-        data['message_id'] = f"{int(time.time())}-{key}"
+        data['messageId'] = f"{int(time.time())}-{key}"
         
         # Encode data and key
         value = json.dumps(data).encode('utf-8')
