@@ -196,8 +196,8 @@ class OrderService:
         bulk_tickets_map = {bt.id: bt for bt in bulk_tickets_query}
         
         try:
-            # Create a list to collect QR codes for notification
-            qr_codes = []
+            # Create a list to collect ticket data for notifications
+            tickets_data = []
             
             # 4. Loop through each assignment and each seat to create individual UserTickets
             for seat_assignment in seat_assignments:
@@ -242,8 +242,13 @@ class OrderService:
                     qr_data_str = json.dumps(qr_data)
                     user_ticket.qr_code_data = qr_data_str
                     
-                    # Add QR code to the list for notification
-                    qr_codes.append(qr_data_str)
+                    # Collect ticket data for notification (send individually later)
+                    tickets_data.append({
+                        "ticket_id": f"ticket_{order.id}_{seat.to_string()}",
+                        "qr_data": qr_data_str,
+                        "event_id": bulk_ticket.event_id,
+                        "venue_id": bulk_ticket.venue_id
+                    })
                     
                     session.add(user_ticket)
                     
@@ -293,39 +298,56 @@ class OrderService:
             session.rollback()  # Rollback all changes if any step failed
             raise HTTPException(status_code=500, detail=f"Failed to complete order due to an internal error: {str(e)}")
         
-        # 7. Send completed order notification with all QR codes to Kafka in a separate try-catch block
+        # 7. Send individual ticket notifications to Kafka in a separate try-catch block
         # This way, notification failures won't affect the order transaction which is already committed
         if order.status == OrderStatus.COMPLETED:
             try:
-                logger.info(f"Sending order completion notification for order {order_id}")
+                logger.info(f"Sending individual ticket notifications for order {order_id}")
                 
-                # Use the qr_codes we already collected during ticket creation
-                # Send consolidated notification with all data
-                notification_data = {
-                    "order_id": order.id,
-                    "firebase_uid": order.firebase_uid,
-                    "total_amount": float(order.total_amount),
-                    "qr_codes": qr_codes,
-                    "notification_type": "order_completed"
-                }
+                # Send individual notification for each ticket
+                successful_notifications = 0
+                failed_notifications = 0
                 
-                # Use the generic send_message function to send all data in one message
-                send_message(
-                    topic="ticket_notifications", 
-                    key=order.firebase_uid, 
-                    data=notification_data,
-                    headers={
-                        "service": b"ticket-order-service",
-                        "message_type": b"order_completed"
-                    }
-                )
+                for ticket_data in tickets_data:
+                    try:
+                        # Create notification message matching consumer's expected format
+                        # Note: timestamp and message_id are automatically added by send_message()
+                        notification_data = {
+                            "eventType": "ticket.generated",
+                            "ticketId": ticket_data['ticket_id'],
+                            "orderId": order.id,
+                            "firebaseUid": order.firebase_uid,
+                            "eventId": str(ticket_data['event_id']),
+                            "venueId": str(ticket_data['venue_id']),
+                            "qrData": ticket_data['qr_data']
+                        }
+                        
+                        # Send individual message for each ticket
+                        send_message(
+                            topic="ticket_notifications", 
+                            key=order.firebase_uid, 
+                            data=notification_data,
+                            headers={
+                                "service": b"ticket-order-service",
+                                "message_type": b"ticket_generated"
+                            }
+                        )
+                        successful_notifications += 1
+                        
+                    except Exception as ticket_error:
+                        failed_notifications += 1
+                        logger.error(f"Failed to send notification for ticket {ticket_data['ticket_id']}: {ticket_error}")
                 
-                logger.info(f"Successfully sent notification for order {order_id} with {len(qr_codes)} tickets")
+                logger.info(f"Sent {successful_notifications}/{len(tickets_data)} ticket notifications for order {order_id}")
+                
+                if failed_notifications > 0:
+                    logger.warning(f"{failed_notifications} ticket notifications failed for order {order_id}")
+                    
             except Exception as kafka_error:
                 # The order succeeded, but notification failed.
                 # DO NOT raise an HTTPException here. The user's order is fine.
                 # This is an internal problem that we must log for monitoring or retry.
-                logger.error(f"ALERT: Order {order_id} committed, but Kafka notification failed. Error: {kafka_error}")
+                logger.error(f"ALERT: Order {order_id} committed, but Kafka notification processing failed. Error: {kafka_error}")
                 # The system needs a way to handle these missed notifications,
                 # but the user's request was successful.
             
