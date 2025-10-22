@@ -8,4 +8,5 @@ stripe>=5.0.0
 redis>=4.0.0
 firebase-admin>=6.0.0
 apscheduler>=3.10.0
+confluent-kafka>=2.12.0
 
