@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 # Default Kafka Producer Configuration
 DEFAULT_CONFIG = {
-    'bootstrap.servers': os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'kafka:9092'),
+    'bootstrap.servers': os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092'),
     'client.id': os.getenv('KAFKA_CLIENT_ID', 'ticket-order-service'),
     'acks': os.getenv('KAFKA_ACKS', 'all'),                     # Wait for all replicas to acknowledge
     'retries': int(os.getenv('KAFKA_RETRIES', '3')),           # Retry on transient errors
