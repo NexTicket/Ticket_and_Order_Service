@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 from sqlmodel import Session, select
 from typing import List, Optional
+from datetime import datetime, timezone
 from models import (
     BulkTicket, BulkTicketCreate, BulkTicketRead, 
     UserTicket, UserTicketCreate, 
@@ -236,3 +237,61 @@ class TicketService:
             })
         
         return result
+    
+    @staticmethod
+    def check_in_ticket(
+        session: Session, 
+        ticket_id_str: str,
+        event_id: int,
+        venue_id: int,
+        seat_dict: dict,
+        firebase_uid: str,
+        order_ref: str
+    ) -> dict:
+        """Check in a ticket by validating QR data and updating status from SOLD to CHECKEDIN"""
+        
+        # Parse seat from dictionary
+        try:
+            seat = SeatID(**seat_dict)
+            seat_json = seat.to_json_str()
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid seat data: {str(e)}"
+            )
+        
+        # Find the user ticket matching all criteria
+        statement = select(UserTicket).where(
+            UserTicket.firebase_uid == firebase_uid,
+            UserTicket.seat_id == seat_json,
+            UserTicket.status == TicketStatus.SOLD
+        ).join(UserOrder).where(
+            UserOrder.order_reference == order_ref
+        ).join(BulkTicket).where(
+            BulkTicket.event_id == event_id,
+            BulkTicket.venue_id == venue_id
+        )
+        
+        ticket = session.exec(statement).first()
+        
+        if not ticket:
+            raise HTTPException(
+                status_code=404,
+                detail="Ticket not found or already checked in"
+            )
+        
+        # Update ticket status to CHECKEDIN
+        ticket.status = TicketStatus.CHECKEDIN
+        session.add(ticket)
+        session.commit()
+        session.refresh(ticket)
+        
+        return {
+            "message": "Ticket checked in successfully",
+            "ticket_id": ticket.id,
+            "status": ticket.status,
+            "seat": seat_dict,
+            "event_id": event_id,
+            "venue_id": venue_id,
+            "checked_in_at": datetime.now(timezone.utc)
+        }
