@@ -72,7 +72,7 @@ def get_bulk_ticket_available_seats(bulk_ticket_id: int, session: Session = Depe
     except HTTPException as e:
         raise e
 
-@router.post("/bulk-ticket/prices")
+@router.get("/bulk-ticket/prices")
 def get_bulk_ticket_prices(
     request_data: BulkTicketPriceRequest,
     session: Session = Depends(get_session)
