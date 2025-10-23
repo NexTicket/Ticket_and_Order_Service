@@ -74,10 +74,15 @@ def get_bulk_ticket_available_seats(bulk_ticket_id: int, session: Session = Depe
 
 @router.get("/bulk-ticket/prices")
 def get_bulk_ticket_prices(
-    request_data: BulkTicketPriceRequest,
+    venue_id: int,
+    event_id: int,
     session: Session = Depends(get_session)
 ):
     """Get all bulk ticket prices for a specific venue and event
+    
+    Query parameters:
+    - venue_id: int - The venue ID
+    - event_id: int - The event ID
     
     Returns a list of dictionaries with section, price, and bulk_ticket_id.
     Example: [
@@ -85,12 +90,14 @@ def get_bulk_ticket_prices(
         {"section": "General", "price": 3000, "bulk_ticket_id": 2},
         {"section": "Balcony", "price": 2000, "bulk_ticket_id": 3}
     ]
+    
+    Usage: GET /bulk-ticket/prices?venue_id=1&event_id=1
     """
     try:
         prices = TicketService.get_bulk_ticket_prices_by_venue_event(
             session, 
-            request_data.venue_id, 
-            request_data.event_id
+            venue_id, 
+            event_id
         )
         return prices
     except HTTPException as e:
