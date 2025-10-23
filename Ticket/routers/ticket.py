@@ -7,7 +7,9 @@ from models import (
     UserTicket, UserTicketRead, 
     BulkTicket, BulkTicketRead,
     TicketWithDetails,
-    BulkTicketPriceRequest
+    BulkTicketPriceRequest,
+    TicketCheckInRequest,
+    TicketCheckInResponse
 )
 from Ticket.services.ticket_service import TicketService
 
@@ -91,5 +93,36 @@ def get_bulk_ticket_prices(
             request_data.event_id
         )
         return prices
+    except HTTPException as e:
+        raise e
+
+@router.post("/check-in", response_model=TicketCheckInResponse)
+def check_in_ticket(
+    check_in_data: TicketCheckInRequest,
+    session: Session = Depends(get_session)
+):
+    """Check in a ticket by validating QR data and updating status from SOLD to CHECKEDIN
+    
+    Request body example:
+    {
+        "ticket_id": "ticket_70b8b9a0-096f-4f29-ac3a-43f4273e5f81_General:R0:C0",
+        "event_id": 1,
+        "venue_id": 1,
+        "seat": {"section": "General", "row_id": 0, "col_id": 0},
+        "firebase_uid": "mznAWfDyWqc67x4OdcpccCUPWub2",
+        "order_ref": "ORD-A8A98F28"
+    }
+    """
+    try:
+        result = TicketService.check_in_ticket(
+            session=session,
+            ticket_id_str=check_in_data.ticket_id,
+            event_id=check_in_data.event_id,
+            venue_id=check_in_data.venue_id,
+            seat_dict=check_in_data.seat,
+            firebase_uid=check_in_data.firebase_uid,
+            order_ref=check_in_data.order_ref
+        )
+        return result
     except HTTPException as e:
         raise e

@@ -46,6 +46,7 @@ class TicketStatus(str, Enum):
     RESERVED = "reserved"
     SOLD = "sold"
     CANCELLED = "cancelled"
+    CHECKEDIN = "checkedin"
 
 class OrderStatus(str, Enum):
     PENDING = "pending"
@@ -358,3 +359,21 @@ class CompleteOrderRequest(SQLModel):
 
 class UpdateOrderStatusRequest(SQLModel):
     status: OrderStatus
+
+# Ticket Check-in Models
+class TicketCheckInRequest(SQLModel):
+    ticket_id: str
+    event_id: int
+    venue_id: int
+    seat: dict  # {"section": "General", "row_id": 0, "col_id": 0}
+    firebase_uid: str
+    order_ref: str
+
+class TicketCheckInResponse(SQLModel):
+    message: str
+    ticket_id: int
+    status: TicketStatus
+    seat: dict
+    event_id: int
+    venue_id: int
+    checked_in_at: datetime
