@@ -1,6 +1,7 @@
 import json
 import os
 import time
+import uuid
 from typing import Dict, Any, Optional, Union
 from confluent_kafka import Producer, KafkaException
 import logging
@@ -116,8 +117,8 @@ def send_notification_message(qr_data: str, firebase_uid: str) -> bool:
         return False
         
     try:
-        # Generate message ID for tracking (using timestamp + user ID)
-        message_id = f"{int(time.time())}-{firebase_uid}"
+        # Generate unique message ID using UUID4 for guaranteed uniqueness
+        message_id = str(uuid.uuid4())
         
         # Create the message payload
         message_payload = {
@@ -175,9 +176,9 @@ def send_message(topic: str, key: str, data: Dict[str, Any], headers: Optional[D
         bool: True if message was produced successfully, False otherwise
     """
     try:
-        # Add metadata
+        # Add metadata with unique message ID
         data['timestamp'] = int(time.time())
-        data['messageId'] = f"{int(time.time())}-{key}"
+        data['messageId'] = str(uuid.uuid4())
         
         # Encode data and key
         value = json.dumps(data).encode('utf-8')
