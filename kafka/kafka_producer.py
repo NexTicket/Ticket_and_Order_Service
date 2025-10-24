@@ -24,7 +24,7 @@ DEFAULT_CONFIG = {
     'retry.backoff.ms': int(os.getenv('KAFKA_RETRY_BACKOFF_MS', '200')),  # Time between retries
     'linger.ms': int(os.getenv('KAFKA_LINGER_MS', '10')),      # Small delay to batch messages
     'batch.size': int(os.getenv('KAFKA_BATCH_SIZE', '16384')), # 16KB batches for efficiency
-    'compression.type': os.getenv('KAFKA_COMPRESSION_TYPE', 'snappy'),  # Compress messages
+    'compression.type': os.getenv('KAFKA_COMPRESSION_TYPE', 'gzip'),  # Compress messages
     'max.in.flight.requests.per.connection': int(os.getenv('KAFKA_MAX_IN_FLIGHT_REQUESTS', '5')),  # Controls order guarantee
     'enable.idempotence': os.getenv('KAFKA_ENABLE_IDEMPOTENCE', 'true').lower() == 'true',  # Exactly-once semantics
     'socket.keepalive.enable': os.getenv('KAFKA_SOCKET_KEEPALIVE_ENABLE', 'true').lower() == 'true',  # Keep connection alive
@@ -160,7 +160,7 @@ def send_notification_message(qr_data: str, firebase_uid: str) -> bool:
         # Don't flush on every error - let the producer handle retries
         return False
 
-@with_retry(max_retries=DEFAULT_CONFIG['retries'])
+
 def send_message(topic: str, key: str, data: Dict[str, Any], headers: Optional[Dict[str, bytes]] = None) -> bool:
     """
     Generic method to send any message to a specified Kafka topic.
@@ -196,9 +196,6 @@ def send_message(topic: str, key: str, data: Dict[str, Any], headers: Optional[D
             headers=headers,
             callback=delivery_report
         )
-        
-        # Poll with small timeout to handle delivery reports
-        producer.poll(0.1)
         
         logger.info(f"Message sent to {topic} with key {key}")
         return True
