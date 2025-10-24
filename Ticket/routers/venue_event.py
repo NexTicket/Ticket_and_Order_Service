@@ -2,10 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel import Session
 from typing import List
 from database import get_session
-from models import (
-    Venue, VenueCreate, VenueRead,
-    Event, EventCreate, EventRead,
-    BulkTicket, BulkTicketCreate, BulkTicketRead,
+from models import (VenueCreate, VenueRead, EventCreate, EventRead, BulkTicketCreate, BulkTicketRead,
     SeatType
 )
 from Ticket.services.venue_service import VenueService
@@ -145,3 +142,14 @@ def create_bulk_tickets_for_event(
         seat_prefix=seat_prefix
     )
     return TicketService.create_bulk_tickets(session, bulk_ticket_data)
+
+@router.get("/event-seat-status/{event_id}")
+def get_event_seat_status(
+    event_id: int,
+    session: Session = Depends(get_session)
+):
+    """
+    Get all seat statuses (booked, locked, available) for an event.
+    Returns seat states for visualization on the seating page.
+    """
+    return EventService.get_event_seat_status(session, event_id)

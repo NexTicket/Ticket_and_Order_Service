@@ -1,9 +1,10 @@
 from fastapi import HTTPException
 from sqlmodel import Session, select
 from typing import List, Optional
-from datetime import datetime
-from models import Event, EventCreate, EventRead, Venue, BulkTicket, BulkTicketCreate, SeatType
-import json
+from datetime import datetime, timezone
+from models import Event, EventCreate, Venue, BulkTicket, BulkTicketCreate, SeatType, SeatID, UserTicket
+from Database.redis_client import redis_conn
+from typing import Dict, Any
 
 class EventService:
     @staticmethod
@@ -122,3 +123,69 @@ class EventService:
         # Return available seats
         available_seats = [seat for seat in all_seats if seat not in sold_seats]
         return available_seats
+    
+    @staticmethod
+    def get_event_seat_status(session: Session, event_id: int) -> Dict[str, Any]:
+        """
+        Get all seat statuses (booked, locked) for an entire event.
+        Returns booked and locked seats for visualization on the seating page.
+        """
+        # Get all bulk tickets for this event
+        bulk_tickets = session.exec(
+            select(BulkTicket).where(BulkTicket.event_id == event_id)
+        ).all()
+        
+        if not bulk_tickets:
+            return {
+                "event_id": event_id,
+                "booked_seats": [],
+                "locked_seats": []
+            }
+        
+        # Get all booked (sold) seats from UserTicket table
+        booked_seats = []
+        for bulk_ticket in bulk_tickets:
+            tickets = session.exec(
+                select(UserTicket).where(UserTicket.bulk_ticket_id == bulk_ticket.id)
+            ).all()
+            
+            for ticket in tickets:
+                try:
+                    seat = ticket.get_seat_object()
+                    booked_seats.append({
+                        "section": seat.section,
+                        "row_id": seat.row_id,
+                        "col_id": seat.col_id
+                    })
+                except Exception:
+                    continue
+        
+        # Get all locked seats from Redis
+        locked_seats = []
+        pattern = f"seat_lock:{event_id}:*"
+        
+        for key in redis_conn.scan_iter(match=pattern):
+            lock_data = redis_conn.hgetall(key)
+            if lock_data:
+                try:
+                    expires_at = datetime.fromisoformat(lock_data['expires_at'])
+                    
+                    if expires_at > datetime.now(timezone.utc):
+                        seat_json = lock_data.get('seat_data')
+                        if seat_json:
+                            seat = SeatID.from_json_str(seat_json)
+                            locked_seats.append({
+                                "section": seat.section,
+                                "row_id": seat.row_id,
+                                "col_id": seat.col_id
+                            })
+                    else:
+                        redis_conn.delete(key)
+                except Exception:
+                    continue
+        
+        return {
+            "event_id": event_id,
+            "booked_seats": booked_seats,
+            "locked_seats": locked_seats
+        }
