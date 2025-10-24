@@ -75,7 +75,7 @@ async def stripe_webhook(
     # 1. Verify the event signature
     try:
         logger.info(f"Stripe signature header: {stripe_signature[:20]}..." if stripe_signature else "None")
-        logger.info(f"Using webhook secret: {STRIPE_WEBHOOK_SECRET[:5]}..." if STRIPE_WEBHOOK_SECRET else "None")
+        logger.info(f"Using webhook secret: {STRIPE_WEBHOOK_SECRET[:10]}..." if STRIPE_WEBHOOK_SECRET else "None")
         
         event = stripe.Webhook.construct_event(
             payload=payload, 
