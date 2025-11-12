@@ -94,6 +94,17 @@ def force_unlock_seat(
             detail="Seat not found or not locked by this user"
         )
 
+@router.get("/event-seat-status/{event_id}")
+def get_event_seat_status(
+    event_id: int,
+    session: Session = Depends(get_session)
+):
+    """
+    Get all seat statuses (booked, locked, available) for an event.
+    Returns seat states for visualization on the seating page.
+    """
+    return TicketLockingService.get_event_seat_status(session, event_id)
+
 @router.get("/stats/{event_id}")
 def get_locking_stats(
     event_id: int,

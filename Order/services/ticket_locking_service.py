@@ -677,3 +677,97 @@ class TicketLockingService:
                         redis_conn.delete(seat_lock_key)
                 
                 break
+    
+    @staticmethod
+    def get_event_seat_status(session: Session, event_id: int) -> Dict[str, Any]:
+        """
+        Get all seat statuses (booked, locked) for an entire event.
+        Returns booked and locked seats for visualization on the seating page.
+        """
+        print(f"[get_event_seat_status] Getting seat status for event {event_id}")
+        
+        # Get all bulk tickets for this event
+        bulk_tickets = session.exec(
+            select(BulkTicket).where(BulkTicket.event_id == event_id)
+        ).all()
+        
+        print(f"[get_event_seat_status] Found {len(bulk_tickets)} bulk tickets for event {event_id}")
+        
+        if not bulk_tickets:
+            return {
+                "event_id": event_id,
+                "booked_seats": [],
+                "locked_seats": []
+            }
+        
+        # Get all booked (sold) seats from UserTicket table
+        booked_seats = []
+        for bulk_ticket in bulk_tickets:
+            print(f"[get_event_seat_status] Checking bulk ticket {bulk_ticket.id} (prefix: {bulk_ticket.seat_prefix})")
+            
+            # Get all user tickets for this bulk ticket
+            tickets = session.exec(
+                select(UserTicket).where(UserTicket.bulk_ticket_id == bulk_ticket.id)
+            ).all()
+            
+            print(f"[get_event_seat_status] Found {len(tickets)} user tickets for bulk ticket {bulk_ticket.id}")
+            
+            for ticket in tickets:
+                try:
+                    seat = ticket.get_seat_object()
+                    seat_data = {
+                        "section": seat.section,
+                        "row_id": seat.row_id,
+                        "col_id": seat.col_id
+                    }
+                    booked_seats.append(seat_data)
+                    print(f"[get_event_seat_status] Added booked seat: {seat_data}")
+                except Exception as e:
+                    print(f"[get_event_seat_status] Error parsing seat for ticket {ticket.id}: {e}")
+                    continue
+        
+        print(f"[get_event_seat_status] Total booked seats: {len(booked_seats)}")
+        
+        # Get all locked seats from Redis
+        locked_seats = []
+        pattern = f"seat_lock:{event_id}:*"
+        
+        print(f"[get_event_seat_status] Scanning Redis for pattern: {pattern}")
+        
+        for key in redis_conn.scan_iter(match=pattern):
+            lock_data = redis_conn.hgetall(key)
+            if lock_data:
+                try:
+                    expires_at = datetime.fromisoformat(lock_data['expires_at'])
+                    # Only include non-expired locks
+                    if expires_at > datetime.now(timezone.utc):
+                        # Parse the seat data
+                        seat_json = lock_data.get('seat_data')
+                        if seat_json:
+                            seat = SeatID.from_json_str(seat_json)
+                            seat_data = {
+                                "section": seat.section,
+                                "row_id": seat.row_id,
+                                "col_id": seat.col_id
+                            }
+                            locked_seats.append(seat_data)
+                            print(f"[get_event_seat_status] Added locked seat: {seat_data}")
+                    else:
+                        # Clean up expired lock
+                        redis_conn.delete(key)
+                        print(f"[get_event_seat_status] Deleted expired lock: {key}")
+                except Exception as e:
+                    print(f"[get_event_seat_status] Error parsing locked seat from key {key}: {e}")
+                    continue
+        
+        print(f"[get_event_seat_status] Total locked seats: {len(locked_seats)}")
+        
+        result = {
+            "event_id": event_id,
+            "booked_seats": booked_seats,
+            "locked_seats": locked_seats
+        }
+        
+        print(f"[get_event_seat_status] Returning result: {result}")
+        
+        return result
